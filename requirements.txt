@@ -1,7 +1,5 @@
-flask==2.3.3
-selenium==4.11.2
-webdriver-manager==4.0.1
-sqlite3
-openai==1.10.0
-python-dotenv==1.0.0
-gunicorn==21.2.0
+flask==3.0.3
+selenium==4.30.0
+webdriver-manager==4.0.2
+python-dotenv==0.98.3
+openai==1.70.0
