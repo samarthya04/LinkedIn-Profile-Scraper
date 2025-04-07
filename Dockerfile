@@ -1,9 +1,10 @@
 FROM python:3.11-slim
 
-# Install dependencies
+# Install dependencies for Chrome and ChromeDriver
 RUN apt-get update && apt-get install -y \
     wget \
     unzip \
+    gnupg \
     libglib2.0-0 \
     libnss3 \
     libgconf-2-4 \
@@ -27,18 +28,9 @@ RUN CHROMEDRIVER_VERSION=$(wget -qO- https://chromedriver.storage.googleapis.com
     && rm chromedriver_linux64.zip \
     && chmod +x /usr/local/bin/chromedriver
 
-# Set working directory
 WORKDIR /app
-
-# Copy requirements and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
 COPY . .
-
-# Expose port (Render will override this with its own PORT env var)
 EXPOSE 5000
-
-# Command to run the app with Gunicorn
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
