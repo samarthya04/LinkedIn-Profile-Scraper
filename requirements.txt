@@ -1,5 +1,5 @@
-flask==3.0.3
-selenium==4.30.0
-webdriver-manager==4.0.2
-python-dotenv==0.98.3
-openai==1.70.0
+flask
+selenium
+webdriver-manager
+python-dotenv
+openai
