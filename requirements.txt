@@ -1,6 +1,5 @@
 flask
-python-dotenv
-openai
-requests-html
-openai
 gunicorn
+selenium
+openai
+python-dotenv
