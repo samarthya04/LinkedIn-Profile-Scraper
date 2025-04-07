@@ -24,7 +24,7 @@ RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key
 # Get Chrome version and install matching ChromeDriver with fallback
 RUN CHROME_VERSION=$(google-chrome --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "135.0.7049") \
     && MAJOR_VERSION=$(echo "$CHROME_VERSION" | cut -d'.' -f1) \
-    && CHROMEDRIVER_VERSION=$(wget -qO- "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${MAJOR_VERSION}" || echo "135.0.7049.42") \
+    && CHROMEDRIVER_VERSION=$(wget -O- "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${MAJOR_VERSION}" || echo "135.0.7049.81") \
     && echo "Installing ChromeDriver version: $CHROMEDRIVER_VERSION for Chrome version: $CHROME_VERSION" \
     && wget -O /tmp/chromedriver.zip "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip" \
     && unzip /tmp/chromedriver.zip -d /usr/local/bin/ \
