@@ -28,7 +28,6 @@ logging.basicConfig(
 
 load_dotenv()
 
-# Initialize Flask app
 app = Flask(__name__, static_folder='static', template_folder='templates')
 
 # OpenRouter LLM Client
@@ -146,6 +145,7 @@ class LinkedInProfileScraper:
 
     def get_chrome_options(self):
         options = webdriver.ChromeOptions()
+        options.binary_location = "/usr/bin/google-chrome"  # Specify Chrome binary location
         options.add_argument(f"user-agent={random.choice(self.user_agents)}")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--no-sandbox")
