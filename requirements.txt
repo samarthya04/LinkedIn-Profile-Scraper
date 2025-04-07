@@ -2,6 +2,5 @@ flask
 python-dotenv
 openai
 requests-html
-sqlite3
 openai
 gunicorn
