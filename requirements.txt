@@ -3,3 +3,4 @@ selenium
 webdriver-manager
 python-dotenv
 openai
+gunicorn
