@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: linkedin-scraper-backend
+    env: python
+    region: oregon
+    plan: free # or starter, depending on your needs
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: gunicorn backend.app:app
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false # Set manually in Render dashboard
+      - key: LINKEDIN_EMAIL
+        sync: false
+      - key: LINKEDIN_PASSWORD
+        sync: false
+      - key: PORT
+        value: 5000
+    autoDeploy: true
+
+  - type: static
+    name: linkedin-scraper-frontend
+    env: static
+    region: oregon
+    buildCommand: ""
+    staticPublishPath: frontend
+    routes:
+      - path: /
+        rewrite: /index.html
+    envVars:
+      - key: BACKEND_URL
+        fromService:
+          type: web
+          name: linkedin-scraper-backend
+          property: host
