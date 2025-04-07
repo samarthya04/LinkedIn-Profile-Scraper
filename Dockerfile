@@ -21,14 +21,15 @@ RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key
     && apt-get install -y google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
-# Get Chrome version and install matching ChromeDriver with fallback
+# Get Chrome version and install matching ChromeDriver from Chrome for Testing
 RUN CHROME_VERSION=$(google-chrome --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "135.0.7049") \
-    && MAJOR_VERSION=$(echo "$CHROME_VERSION" | cut -d'.' -f1) \
-    && CHROMEDRIVER_VERSION=$(wget -O- "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${MAJOR_VERSION}" || echo "135.0.7049.81") \
-    && echo "Installing ChromeDriver version: $CHROMEDRIVER_VERSION for Chrome version: $CHROME_VERSION" \
-    && wget -O /tmp/chromedriver.zip "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip" \
-    && unzip /tmp/chromedriver.zip -d /usr/local/bin/ \
-    && rm /tmp/chromedriver.zip \
+    && echo "Chrome version: $CHROME_VERSION" \
+    && CHROMEDRIVER_VERSION=$(wget -O- "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_${CHROME_VERSION}" || echo "135.0.7049.81") \
+    && echo "Installing ChromeDriver version: $CHROMEDRIVER_VERSION" \
+    && wget -O /tmp/chromedriver.zip "https://storage.googleapis.com/chrome-for-testing-public/${CHROMEDRIVER_VERSION}/linux64/chromedriver-linux64.zip" \
+    && unzip /tmp/chromedriver.zip -d /tmp/ \
+    && mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/ \
+    && rm -rf /tmp/chromedriver.zip /tmp/chromedriver-linux64 \
     && chmod +x /usr/local/bin/chromedriver \
     && chromedriver --version
 
