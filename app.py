@@ -168,7 +168,8 @@ class LinkedInProfileScraper:
 
     def get_chrome_options(self):
         options = webdriver.ChromeOptions()
-        chrome_binary = os.getenv("CHROME_BINARY_PATH", "/usr/bin/google-chrome-stable")
+        # Use Render's default Chrome binary path or fallback
+        chrome_binary = os.getenv("CHROME_BINARY_PATH", "/usr/lib/chromium-browser/chrome")
         if os.path.exists(chrome_binary):
             options.binary_location = chrome_binary
         options.add_argument(f"user-agent={random.choice(self.user_agents)}")
@@ -439,7 +440,6 @@ def start_scrape():
     if not email or not password:
         return jsonify({"status": "error", "message": "Email and password are required"})
     
-    # Use provided credentials, fall back to environment if not provided (optional)
     search_keys = {
         "username": email,
         "password": password,
@@ -489,5 +489,6 @@ def get_profiles():
         return jsonify([])
 
 if __name__ == "__main__":
+    # Render expects the app to bind to 0.0.0.0 and use the PORT env variable
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
