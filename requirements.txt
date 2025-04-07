@@ -1,6 +1,7 @@
 flask
 selenium
 webdriver-manager
+requests-html
 python-dotenv
 openai
 gunicorn
