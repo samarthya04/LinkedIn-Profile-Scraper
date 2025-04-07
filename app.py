@@ -35,14 +35,18 @@ class LLMClient:
     def __init__(self):
         api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
-            raise ValueError("OPENROUTER_API_KEY not found in environment")
+            logging.warning("OPENROUTER_API_KEY not found, using fallback decision logic")
         self.client = AsyncOpenAI(
-            api_key=api_key,
+            api_key=api_key or "dummy_key",
             base_url="https://openrouter.ai/api/v1"
         )
 
     async def query(self, prompt):
         try:
+            if not os.getenv("OPENROUTER_API_KEY"):
+                # Fallback logic if no API key
+                return {"action": "2", "reasoning": "Default scrape because no API key is available"}
+                
             response = await self.client.chat.completions.create(
                 model="openai/gpt-3.5-turbo",
                 max_tokens=150,
@@ -53,8 +57,12 @@ class LLMClient:
                 ]
             )
             content = response.choices[0].message.content.strip()
-            action = content.split("Action: ")[1].split("\n")[0]
-            reasoning = content.split("Reasoning: ")[1]
+            try:
+                action = content.split("Action: ")[1].split("\n")[0] if "Action: " in content else "2"
+                reasoning = content.split("Reasoning: ")[1] if "Reasoning: " in content else "Default action"
+            except IndexError:
+                action = "2"
+                reasoning = "Default action due to parsing error"
             return {"action": action, "reasoning": reasoning}
         except Exception as e:
             logging.error(f"OpenRouter API query failed: {str(e)}")
@@ -70,9 +78,7 @@ search_keys = {
 }
 
 if not search_keys["username"] or not search_keys["password"]:
-    raise ValueError("LINKEDIN_EMAIL or LINKEDIN_PASSWORD not found in environment")
-
-logging.info(f"Loaded credentials - Username: {search_keys['username']}")
+    logging.warning("LINKEDIN_EMAIL or LINKEDIN_PASSWORD not found in environment")
 
 class ScraperMemory:
     def __init__(self):
@@ -102,7 +108,11 @@ class LinkedInProfileScraper:
     def __init__(self, search_keys, llm_client, headless=True):
         self.search_keys = search_keys
         self.llm = llm_client
-        self.db_conn = sqlite3.connect('/tmp/linkedin_profiles.db', check_same_thread=False)  # Use /tmp for Render
+        
+        # Ensure temp directory exists
+        os.makedirs("/tmp", exist_ok=True)
+        
+        self.db_conn = sqlite3.connect('/tmp/linkedin_profiles.db', check_same_thread=False)
         self._init_db()
         self.max_profiles = int(os.getenv("MAX_PROFILES", 200))
         self.headless = headless
@@ -148,7 +158,12 @@ class LinkedInProfileScraper:
 
     def get_chrome_options(self):
         options = webdriver.ChromeOptions()
-        options.binary_location = os.getenv("CHROME_BINARY_PATH", "/usr/bin/chromium")  # Render's Chromium path
+        
+        # Chrome binary path for Render
+        chrome_binary = os.getenv("CHROME_BINARY_PATH", "/usr/bin/google-chrome-stable")
+        if os.path.exists(chrome_binary):
+            options.binary_location = chrome_binary
+        
         options.add_argument(f"user-agent={random.choice(self.user_agents)}")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--no-sandbox")
@@ -161,8 +176,10 @@ class LinkedInProfileScraper:
 
     async def login(self, driver, max_retries=3):
         for attempt in range(max_retries):
-            driver.get("https://www.linkedin.com/login")
             try:
+                driver.get("https://www.linkedin.com/login")
+                logging.info("Loading login page")
+                
                 WebDriverWait(driver, 30).until(
                     EC.presence_of_element_located((By.ID, "username"))
                 )
@@ -191,7 +208,9 @@ class LinkedInProfileScraper:
                     self._human_like_delay()
             except Exception as e:
                 logging.error(f"Login failed: {str(e)}")
-                raise
+                if attempt == max_retries - 1:
+                    raise
+                self._human_like_delay()
         self._human_like_delay()
 
     async def navigate_to_people_search(self, driver):
@@ -228,7 +247,10 @@ class LinkedInProfileScraper:
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(5)
             profile_cards = len(driver.find_elements(By.XPATH, "//a[contains(@href, '/in/')]"))
-            next_button = driver.find_element(By.CSS_SELECTOR, "button[aria-label='Next']").is_enabled()
+            next_button_exists = len(driver.find_elements(By.CSS_SELECTOR, "button[aria-label='Next']")) > 0
+            next_button = False
+            if next_button_exists:
+                next_button = driver.find_element(By.CSS_SELECTOR, "button[aria-label='Next']").is_enabled()
         except NoSuchElementException:
             next_button = False
             profile_cards = 0
@@ -287,7 +309,8 @@ class LinkedInProfileScraper:
                             })
                             memory.state['visited_urls'].add(url)
                             logging.info(f"Scraped profile: {name} - {url}")
-                except Exception:
+                except Exception as e:
+                    logging.debug(f"Error processing link: {str(e)}")
                     continue
         except TimeoutException:
             logging.error("Timeout waiting for profile links")
@@ -329,7 +352,7 @@ class LinkedInProfileScraper:
                 if profiles:
                     self._save_profiles(profiles)
                 self._human_like_delay()
-            elif action == "3":
+            else:  # action == "3" or any other value
                 break
 
     async def run_search(self, driver, keyword, location, memory):
@@ -337,25 +360,29 @@ class LinkedInProfileScraper:
         await self.navigate_search_results(driver, keyword, location, memory)
 
     def export_to_json(self):
-        cursor = self.db_conn.cursor()
-        cursor.execute('SELECT id, name, url, last_scraped FROM profiles')
-        profiles = [{
-            'name': row[1],
-            'url': row[2],
-            'scraped_at': row[3]
-        } for row in cursor.fetchall()]
-        
         try:
-            with open(self.search_keys["filename"], 'r') as f:
-                existing_profiles = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            existing_profiles = []
-        
-        updated_profiles = existing_profiles + [p for p in profiles if p not in existing_profiles]
-        
-        with open(self.search_keys["fullname"], 'w') as f:
-            json.dump(updated_profiles, f, indent=2)
-        return updated_profiles
+            cursor = self.db_conn.cursor()
+            cursor.execute('SELECT id, name, url, last_scraped FROM profiles')
+            profiles = [{
+                'name': row[1],
+                'url': row[2],
+                'scraped_at': row[3]
+            } for row in cursor.fetchall()]
+            
+            try:
+                with open(self.search_keys["filename"], 'r') as f:
+                    existing_profiles = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                existing_profiles = []
+            
+            updated_profiles = existing_profiles + [p for p in profiles if p not in existing_profiles]
+            
+            with open(self.search_keys["filename"], 'w') as f:
+                json.dump(updated_profiles, f, indent=2)
+            return updated_profiles
+        except Exception as e:
+            logging.error(f"Error exporting profiles: {str(e)}")
+            return []
 
 # Flask Routes
 @app.route('/')
@@ -364,6 +391,9 @@ def index():
 
 @app.route('/start_scrape', methods=['POST'])
 def start_scrape():
+    if not search_keys["username"] or not search_keys["password"]:
+        return jsonify({"status": "error", "message": "LinkedIn credentials not set. Please configure LINKEDIN_EMAIL and LINKEDIN_PASSWORD environment variables."})
+    
     data = request.get_json() or {}
     keyword = data.get('keyword', search_keys["keywords"][0])
     location = data.get('location', search_keys["locations"][0])
@@ -372,19 +402,22 @@ def start_scrape():
     scraper = LinkedInProfileScraper(search_keys, llm_client, headless=True)
     
     def run_scraper():
-        driver = webdriver.Chrome(options=scraper.get_chrome_options())
-        memory = ScraperMemory()
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(scraper.login(driver, max_retries=3))
-            loop.run_until_complete(scraper.run_search(driver, keyword, location, memory))
+            driver = webdriver.Chrome(options=scraper.get_chrome_options())
+            memory = ScraperMemory()
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(scraper.login(driver, max_retries=3))
+                loop.run_until_complete(scraper.run_search(driver, keyword, location, memory))
+            except Exception as e:
+                logging.error(f"Scraper thread error: {str(e)}")
+            finally:
+                driver.quit()
+                loop.close()
+                scraper.db_conn.close()
         except Exception as e:
-            logging.error(f"Scraper thread error: {str(e)}")
-        finally:
-            driver.quit()
-            loop.close()
-            scraper.db_conn.close()
+            logging.error(f"Failed to initialize Chrome: {str(e)}")
     
     thread = threading.Thread(target=run_scraper)
     thread.daemon = True
@@ -395,9 +428,12 @@ def start_scrape():
 @app.route('/profiles', methods=['GET'])
 def get_profiles():
     try:
-        with open(search_keys["filename"], 'r') as f:
-            profiles = json.load(f)
-        return jsonify(profiles)
+        if os.path.exists(search_keys["filename"]):
+            with open(search_keys["filename"], 'r') as f:
+                profiles = json.load(f)
+            return jsonify(profiles)
+        else:
+            return jsonify([])
     except (FileNotFoundError, json.JSONDecodeError):
         return jsonify([])
 
