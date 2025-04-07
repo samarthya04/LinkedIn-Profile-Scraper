@@ -54,16 +54,16 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt \
-    && pip install gunicorn  # Ensure gunicorn is installed
+    && pip install gunicorn
 
 # Create necessary directories
 RUN mkdir -p /app/static /app/templates /tmp/data \
-    && chmod -R 777 /tmp/data  # Ensure write permissions for non-root user
+    && chmod -R 777 /tmp/data 
 
 # Copy application files
 COPY linkedin_scraper.py .
 COPY templates/index.html templates/
-COPY static/styles.css static/  # Assuming you have this file
+COPY static/styles.css static/
 
 # Create a non-root user and set permissions
 RUN groupadd -r appuser && useradd -r -g appuser -d /home/appuser -m appuser \
