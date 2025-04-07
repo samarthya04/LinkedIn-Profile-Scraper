@@ -15,6 +15,7 @@ import os
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 import hashlib
+import threading
 
 # Configure logging
 logging.basicConfig(
@@ -24,6 +25,9 @@ logging.basicConfig(
 )
 
 load_dotenv()
+
+# Global stop event
+stop_event = threading.Event()
 
 # OpenRouter LLM Client
 class LLMClient:
@@ -102,8 +106,8 @@ class LinkedInProfileScraper:
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'
         ]
-        # Uncomment and configure if using proxies
-        # self.proxies = ["http://proxy1:port", "http://proxy2:port"]
+        self.stop_event = stop_event  # Add stop event to instance
+        self.status = {"running": False, "profiles_collected": 0}  # Status tracking for Flask
 
     def _init_db(self):
         with self.db_conn:
@@ -132,6 +136,7 @@ class LinkedInProfileScraper:
                                VALUES (?, ?, ?, ?)''',
                             (profile['id'], profile['name'], 
                              profile['url'], profile['timestamp']))
+        self.update_status(profiles_collected=self._count_profiles())  # Update status
         self.export_to_json()  # Checkpoint after every save
 
     def _human_like_delay(self):
@@ -146,8 +151,6 @@ class LinkedInProfileScraper:
         options.add_argument("--disable-blink-features=AutomationControlled")
         if self.headless:
             options.add_argument("--headless")
-        # Uncomment to use proxies
-        # options.add_argument(f"--proxy-server={random.choice(self.proxies)}")
         return options
 
     async def login(self, driver):
@@ -247,7 +250,6 @@ class LinkedInProfileScraper:
         """
         decision = await self.llm.query(prompt)
         
-        # Override stop if less than 200 profiles
         if decision["action"] == "3" and profile_count < self.max_profiles and (next_button or profile_cards > 0):
             return {"action": "1" if next_button else "2", 
                     "reasoning": "Override: Less than 200 profiles, continuing with next page or scrape."}
@@ -263,7 +265,7 @@ class LinkedInProfileScraper:
             )
             links = driver.find_elements(By.XPATH, "//a[contains(@href, '/in/')]")
             for link in links:
-                if self._count_profiles() >= self.max_profiles:
+                if self._count_profiles() >= self.max_profiles or self.stop_event.is_set():
                     break
                 try:
                     url = link.get_attribute("href").split("?")[0]
@@ -307,7 +309,7 @@ class LinkedInProfileScraper:
 
     async def navigate_search_results(self, driver, keyword, location, memory):
         await self.enter_search_keys(driver, keyword, location)
-        while self._count_profiles() < self.max_profiles:
+        while self._count_profiles() < self.max_profiles and not self.stop_event.is_set():
             if memory.should_stop():
                 logging.error("Stopping due to potential infinite loop")
                 break
@@ -317,6 +319,10 @@ class LinkedInProfileScraper:
             page_hash = await self.get_page_hash(driver)
             logging.info(f"LLM decided: {action} - {reasoning}")
             memory.update(driver.current_url, action, page_hash)
+            
+            if self.stop_event.is_set():
+                logging.info("Stop event received, exiting navigation")
+                break
             
             if action == "1":
                 if not await self.click_next_with_retry(driver):
@@ -336,8 +342,11 @@ class LinkedInProfileScraper:
         semaphore = asyncio.Semaphore(2)  # Limit to 2 concurrent browsers
         async def limited_run(kw, loc):
             async with semaphore:
+                if self.stop_event.is_set():
+                    logging.info(f"Skipping {kw} {loc} due to stop event")
+                    return
                 driver = webdriver.Chrome(options=self.get_chrome_options())
-                memory = ScraperMemory()  # Each browser has its own memory
+                memory = ScraperMemory()
                 try:
                     await self.login(driver)
                     await self.run_search(driver, kw, loc, memory)
@@ -346,13 +355,15 @@ class LinkedInProfileScraper:
                 finally:
                     driver.quit()
 
+        self.update_status(running=True)  # Set running status
         tasks = [
             limited_run(kw, loc)
             for kw in self.search_keys["keywords"] 
             for loc in self.search_keys["locations"]
-            if self._count_profiles() < self.max_profiles
+            if self._count_profiles() < self.max_profiles and not self.stop_event.is_set()
         ]
         await asyncio.gather(*tasks)
+        self.update_status(running=False)  # Clear running status
 
     def export_to_json(self):
         cursor = self.db_conn.cursor()
@@ -379,8 +390,28 @@ class LinkedInProfileScraper:
         try:
             asyncio.run(self.run_parallel_searches())
             logging.info(f"Total profiles collected: {self._count_profiles()}")
+        except Exception as e:
+            logging.error(f"Scraper run failed: {str(e)}")
         finally:
-            self.db_conn.close()
+            self.update_status(running=False)
+            if self.db_conn:
+                self.db_conn.close()
+            if self.stop_event.is_set():
+                logging.info("Scraper stopped by external request")
+
+    # New methods for status and stop control
+    def update_status(self, running=None, profiles_collected=None):
+        if running is not None:
+            self.status["running"] = running
+        if profiles_collected is not None:
+            self.status["profiles_collected"] = profiles_collected
+
+    def get_status(self):
+        return self.status
+
+    def stop(self):
+        self.stop_event.set()
+        logging.info("Stop signal sent to scraper")
 
 if __name__ == "__main__":
     llm_client = LLMClient()
