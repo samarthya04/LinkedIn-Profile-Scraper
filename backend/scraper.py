@@ -68,7 +68,7 @@ class LLMClient:
         except Exception as e:
             logging.error(f"OpenRouter API query failed: {str(e)}")
             return {"action": "2", "reasoning": "Default scrape due to OpenRouter API error"}
-
+            
 class ScraperMemory:
     def __init__(self):
         self.state = {
