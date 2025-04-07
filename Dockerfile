@@ -12,6 +12,8 @@ RUN apt-get update && apt-get install -y \
     libxrender1 \
     libxtst6 \
     libxi6 \
+    net-tools \
+    iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Chrome
