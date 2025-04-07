@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, request
-from scraper import LinkedInProfileScraper, LLMClient, search_keys
+from .scraper import LinkedInProfileScraper, LLMClient, search_keys  # Relative import
 import asyncio
 import os
 from dotenv import load_dotenv
@@ -8,7 +8,7 @@ app = Flask(__name__)
 load_dotenv()
 
 llm_client = LLMClient()
-scraper = LinkedInProfileScraper(search_keys, llm_client, headless=True)  # Headless for server
+scraper = LinkedInProfileScraper(search_keys, llm_client, headless=True)
 
 @app.route('/api/start-scrape', methods=['POST'])
 def start_scrape():
