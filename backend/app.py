@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, request
-from .scraper import LinkedInProfileScraper, LLMClient, search_keys  # Relative import
+from scraper import LinkedInProfileScraper, LLMClient, search_keys  # Absolute import
 import asyncio
 import os
 from dotenv import load_dotenv
