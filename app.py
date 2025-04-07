@@ -18,7 +18,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import threading
 
-# Configure logging for Render (stdout/stderr)
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -27,10 +27,8 @@ logging.basicConfig(
 
 load_dotenv()
 
-# Initialize Flask app with static and template folders
 app = Flask(__name__, static_folder='static', template_folder='templates')
 
-# OpenRouter LLM Client
 class LLMClient:
     def __init__(self):
         api_key = os.getenv("OPENROUTER_API_KEY")
@@ -45,7 +43,6 @@ class LLMClient:
         try:
             if not os.getenv("OPENROUTER_API_KEY"):
                 return {"action": "2", "reasoning": "Default scrape because no API key is available"}
-                
             response = await self.client.chat.completions.create(
                 model="openai/gpt-3.5-turbo",
                 max_tokens=150,
@@ -66,18 +63,6 @@ class LLMClient:
         except Exception as e:
             logging.error(f"OpenRouter API query failed: {str(e)}")
             return {"action": "2", "reasoning": "Default scrape due to API error"}
-
-# Search keys from environment variables
-search_keys = { 
-    "username": os.getenv("LINKEDIN_EMAIL"),
-    "password": os.getenv("LINKEDIN_PASSWORD"),
-    "keywords": os.getenv("SEARCH_KEYWORDS", "Data Scientist,Software Engineer").split(","),
-    "locations": os.getenv("SEARCH_LOCATIONS", "New Delhi,Bhubaneswar").split(","),
-    "filename": os.getenv("OUTPUT_FILENAME", "/tmp/profiles.json")  # Use /tmp for Render
-}
-
-if not search_keys["username"] or not search_keys["password"]:
-    logging.warning("LINKEDIN_EMAIL or LINKEDIN_PASSWORD not found in environment")
 
 class ScraperMemory:
     def __init__(self):
@@ -106,11 +91,7 @@ class ScraperMemory:
 class LinkedInProfileScraper:
     def __init__(self, search_keys, llm_client, headless=True):
         self.search_keys = search_keys
-        self.llm = llm_client
-        
-        # Ensure temp directory exists
         os.makedirs("/tmp", exist_ok=True)
-        
         self.db_conn = sqlite3.connect('/tmp/linkedin_profiles.db', check_same_thread=False)
         self._init_db()
         self.max_profiles = int(os.getenv("MAX_PROFILES", 200))
@@ -119,6 +100,7 @@ class LinkedInProfileScraper:
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'
         ]
+        self.llm = llm_client
 
     def _init_db(self):
         with self.db_conn:
@@ -442,19 +424,29 @@ class LinkedInProfileScraper:
             logging.error(f"Error exporting profiles: {str(e)}")
             return []
 
-# Flask Routes
 @app.route('/')
 def index():
-    return render_template('index.html')  # Serve the frontend
+    return render_template('index.html')
 
 @app.route('/start_scrape', methods=['POST'])
 def start_scrape():
-    if not search_keys["username"] or not search_keys["password"]:
-        return jsonify({"status": "error", "message": "LinkedIn credentials not set. Please configure LINKEDIN_EMAIL and LINKEDIN_PASSWORD environment variables."})
-    
     data = request.get_json() or {}
-    keyword = data.get('keyword', search_keys["keywords"][0])
-    location = data.get('location', search_keys["locations"][0])
+    email = data.get('email')
+    password = data.get('password')
+    keyword = data.get('keyword', 'Data Scientist')
+    location = data.get('location', 'New Delhi')
+    
+    if not email or not password:
+        return jsonify({"status": "error", "message": "Email and password are required"})
+    
+    # Use provided credentials, fall back to environment if not provided (optional)
+    search_keys = {
+        "username": email,
+        "password": password,
+        "keywords": [keyword],
+        "locations": [location],
+        "filename": os.getenv("OUTPUT_FILENAME", "/tmp/profiles.json")
+    }
     
     llm_client = LLMClient()
     scraper = LinkedInProfileScraper(search_keys, llm_client, headless=True)
@@ -485,9 +477,10 @@ def start_scrape():
 
 @app.route('/profiles', methods=['GET'])
 def get_profiles():
+    filename = os.getenv("OUTPUT_FILENAME", "/tmp/profiles.json")
     try:
-        if os.path.exists(search_keys["filename"]):
-            with open(search_keys["filename"], 'r') as f:
+        if os.path.exists(filename):
+            with open(filename, 'r') as f:
                 profiles = json.load(f)
             return jsonify(profiles)
         else:
