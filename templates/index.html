@@ -4,54 +4,275 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LinkedIn Profile Scraper</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
 <body>
     <div class="container">
-        <div class="card p-4">
-            <h2 class="text-center mb-4">LinkedIn Profile Scraper</h2>
-            <form id="scrapeForm">
-                <div class="mb-3">
-                    <label for="keyword" class="form-label">Keyword</label>
-                    <input type="text" class="form-control" id="keyword" name="keyword" value="Data Scientist">
+        <header>
+            <div class="logo">
+                <i class="fab fa-linkedin"></i>
+                <h1>Profile Scraper</h1>
+            </div>
+            <div class="status-bar">
+                <div id="status">Ready</div>
+                <div class="status-indicator" id="status-indicator"></div>
+            </div>
+        </header>
+
+        <main>
+            <div class="card search-card">
+                <h2><i class="fas fa-search"></i> Search Parameters</h2>
+                <div class="form-group">
+                    <label for="keyword">Job Title</label>
+                    <input type="text" id="keyword" placeholder="e.g. Data Scientist, Software Engineer">
                 </div>
-                <div class="mb-3">
-                    <label for="location" class="form-label">Location</label>
-                    <input type="text" class="form-control" id="location" name="location" value="New Delhi">
+                <div class="form-group">
+                    <label for="location">Location</label>
+                    <input type="text" id="location" placeholder="e.g. New Delhi, Bhubaneswar">
                 </div>
-                <button type="submit" class="btn btn-primary w-100">Start Scraping</button>
-            </form>
-            <div id="status" class="mt-3 text-center"></div>
-            <button class="btn btn-secondary w-100 mt-3" onclick="loadProfiles()">Load Profiles</button>
-            <div id="profiles"></div>
+                <button id="start-scrape" class="btn primary">
+                    <i class="fas fa-play"></i> Start Scraping
+                </button>
+            </div>
+
+            <div class="card stats-card">
+                <h2><i class="fas fa-chart-bar"></i> Statistics</h2>
+                <div class="stats-container">
+                    <div class="stat-item">
+                        <div class="stat-number" id="total-profiles">0</div>
+                        <div class="stat-label">Profiles</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="last-update">-</div>
+                        <div class="stat-label">Last Update</div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <section class="results-section">
+            <div class="card results-card">
+                <div class="card-header">
+                    <h2><i class="fas fa-list"></i> Scraped Profiles</h2>
+                    <div class="card-actions">
+                        <button id="refresh-profiles" class="btn secondary">
+                            <i class="fas fa-sync-alt"></i> Refresh
+                        </button>
+                        <button id="export-profiles" class="btn secondary">
+                            <i class="fas fa-download"></i> Export
+                        </button>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table id="profiles-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Name</th>
+                                <th>Profile URL</th>
+                                <th>Scraped At</th>
+                            </tr>
+                        </thead>
+                        <tbody id="profiles-data">
+                            <tr class="empty-state">
+                                <td colspan="4">No profiles scraped yet</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="pagination">
+                    <button id="prev-page" class="btn pagination-btn" disabled>
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                    <span id="page-indicator">Page 1 of 1</span>
+                    <button id="next-page" class="btn pagination-btn" disabled>
+                        <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <div id="toast" class="toast hidden">
+            <div class="toast-content">
+                <i class="fas fa-info-circle toast-icon"></i>
+                <div class="toast-message">Operation successful</div>
+            </div>
+            <div class="toast-progress"></div>
         </div>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const keyword = document.getElementById('keyword').value;
-            const location = document.getElementById('location').value;
-            const statusDiv = document.getElementById('status');
-            statusDiv.innerHTML = 'Starting...';
-            const response = await fetch('/start_scrape', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ keyword, location })
-            });
-            const result = await response.json();
-            statusDiv.innerHTML = `${result.status} for ${result.keyword} in ${result.location}`;
-        });
 
-        async function loadProfiles() {
-            const response = await fetch('/profiles');
-            const profiles = await response.json();
-            const profilesDiv = document.getElementById('profiles');
-            profilesDiv.innerHTML = '<h3 class="mt-3">Scraped Profiles</h3>' + profiles.map(p => 
-                `<div class="card mb-2 p-2"><a href="${p.url}" target="_blank">${p.name}</a> (Scraped: ${p.scraped_at})</div>`
-            ).join('');
-        }
+    <footer>
+        <p>&copy; 2025 LinkedIn Profile Scraper</p>
+    </footer>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const statusIndicator = document.getElementById('status-indicator');
+            const statusText = document.getElementById('status');
+            const startScrapeBtn = document.getElementById('start-scrape');
+            const refreshProfilesBtn = document.getElementById('refresh-profiles');
+            const exportProfilesBtn = document.getElementById('export-profiles');
+            const totalProfilesEl = document.getElementById('total-profiles');
+            const lastUpdateEl = document.getElementById('last-update');
+            const profilesData = document.getElementById('profiles-data');
+            const prevPageBtn = document.getElementById('prev-page');
+            const nextPageBtn = document.getElementById('next-page');
+            const pageIndicator = document.getElementById('page-indicator');
+            const toast = document.getElementById('toast');
+            
+            let profiles = [];
+            let currentPage = 1;
+            const profilesPerPage = 10;
+            
+            // Load profiles on page load
+            loadProfiles();
+            
+            // Setup refresh interval
+            setInterval(loadProfiles, 60000); // Refresh every minute
+            
+            startScrapeBtn.addEventListener('click', function() {
+                const keyword = document.getElementById('keyword').value.trim() || 'Data Scientist';
+                const location = document.getElementById('location').value.trim() || 'New Delhi';
+                
+                setStatus('Scraping...', 'active');
+                startScrapeBtn.disabled = true;
+                
+                fetch('/start_scrape', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ keyword, location })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    showToast(`Scraping completed for ${keyword} in ${location}`);
+                    setStatus('Ready', 'success');
+                    startScrapeBtn.disabled = false;
+                    loadProfiles();
+                })
+                .catch(error => {
+                    showToast('Error: ' + error, 'error');
+                    setStatus('Error', 'error');
+                    startScrapeBtn.disabled = false;
+                });
+            });
+            
+            refreshProfilesBtn.addEventListener('click', loadProfiles);
+            
+            exportProfilesBtn.addEventListener('click', function() {
+                if (profiles.length === 0) {
+                    showToast('No profiles to export', 'error');
+                    return;
+                }
+                
+                const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(profiles, null, 2));
+                const downloadAnchorNode = document.createElement('a');
+                downloadAnchorNode.setAttribute("href", dataStr);
+                downloadAnchorNode.setAttribute("download", "linkedin_profiles.json");
+                document.body.appendChild(downloadAnchorNode);
+                downloadAnchorNode.click();
+                downloadAnchorNode.remove();
+                
+                showToast('Profiles exported successfully');
+            });
+            
+            prevPageBtn.addEventListener('click', function() {
+                if (currentPage > 1) {
+                    currentPage--;
+                    renderProfiles();
+                }
+            });
+            
+            nextPageBtn.addEventListener('click', function() {
+                const maxPages = Math.ceil(profiles.length / profilesPerPage);
+                if (currentPage < maxPages) {
+                    currentPage++;
+                    renderProfiles();
+                }
+            });
+            
+            function loadProfiles() {
+                fetch('/profiles')
+                    .then(response => response.json())
+                    .then(data => {
+                        profiles = data;
+                        totalProfilesEl.textContent = profiles.length;
+                        lastUpdateEl.textContent = new Date().toLocaleTimeString();
+                        currentPage = 1;
+                        renderProfiles();
+                    })
+                    .catch(error => {
+                        showToast('Error loading profiles', 'error');
+                    });
+            }
+            
+            function renderProfiles() {
+                if (profiles.length === 0) {
+                    profilesData.innerHTML = '<tr class="empty-state"><td colspan="4">No profiles scraped yet</td></tr>';
+                    prevPageBtn.disabled = true;
+                    nextPageBtn.disabled = true;
+                    pageIndicator.textContent = 'Page 1 of 1';
+                    return;
+                }
+                
+                const start = (currentPage - 1) * profilesPerPage;
+                const end = Math.min(start + profilesPerPage, profiles.length);
+                const maxPages = Math.ceil(profiles.length / profilesPerPage);
+                
+                let html = '';
+                for (let i = start; i < end; i++) {
+                    const profile = profiles[i];
+                    const index = i + 1;
+                    const datetime = new Date(profile.scraped_at).toLocaleString();
+                    
+                    html += `
+                        <tr>
+                            <td>${index}</td>
+                            <td>${profile.name}</td>
+                            <td><a href="${profile.url}" target="_blank">${profile.url.split('/in/')[1]}</a></td>
+                            <td>${datetime}</td>
+                        </tr>
+                    `;
+                }
+                
+                profilesData.innerHTML = html;
+                prevPageBtn.disabled = currentPage === 1;
+                nextPageBtn.disabled = currentPage === maxPages;
+                pageIndicator.textContent = `Page ${currentPage} of ${maxPages}`;
+            }
+            
+            function setStatus(message, type) {
+                statusText.textContent = message;
+                statusIndicator.className = 'status-indicator';
+                if (type) {
+                    statusIndicator.classList.add(type);
+                }
+            }
+            
+            function showToast(message, type = 'success') {
+                const toastEl = document.getElementById('toast');
+                const toastMessage = document.querySelector('.toast-message');
+                const toastIcon = document.querySelector('.toast-icon');
+                
+                toastMessage.textContent = message;
+                toastEl.className = 'toast';
+                toastEl.classList.add(type);
+                
+                if (type === 'error') {
+                    toastIcon.className = 'fas fa-exclamation-circle toast-icon';
+                } else {
+                    toastIcon.className = 'fas fa-check-circle toast-icon';
+                }
+                
+                toastEl.classList.remove('hidden');
+                
+                setTimeout(() => {
+                    toastEl.classList.add('hidden');
+                }, 3000);
+            }
+        });
     </script>
 </body>
 </html>
