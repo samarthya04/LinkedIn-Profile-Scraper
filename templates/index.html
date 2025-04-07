@@ -145,7 +145,12 @@
                     },
                     body: JSON.stringify({ keyword, location })
                 })
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`Status: ${response.status}`);
+                    }
+                    return response.json();
+                })
                 .then(data => {
                     showToast(`Scraping completed for ${keyword} in ${location}`);
                     setStatus('Ready', 'success');
@@ -153,7 +158,8 @@
                     loadProfiles();
                 })
                 .catch(error => {
-                    showToast('Error: ' + error, 'error');
+                    console.error('Error:', error);
+                    showToast('Error: ' + error.message, 'error');
                     setStatus('Error', 'error');
                     startScrapeBtn.disabled = false;
                 });
@@ -195,7 +201,12 @@
             
             function loadProfiles() {
                 fetch('/profiles')
-                    .then(response => response.json())
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`Status: ${response.status}`);
+                        }
+                        return response.json();
+                    })
                     .then(data => {
                         profiles = data;
                         totalProfilesEl.textContent = profiles.length;
@@ -204,7 +215,8 @@
                         renderProfiles();
                     })
                     .catch(error => {
-                        showToast('Error loading profiles', 'error');
+                        console.error('Error loading profiles:', error);
+                        showToast('Error loading profiles: ' + error.message, 'error');
                     });
             }
             
@@ -225,13 +237,26 @@
                 for (let i = start; i < end; i++) {
                     const profile = profiles[i];
                     const index = i + 1;
-                    const datetime = new Date(profile.scraped_at).toLocaleString();
+                    
+                    // Handle potential date format issues
+                    let datetime;
+                    try {
+                        datetime = new Date(profile.scraped_at).toLocaleString();
+                    } catch (e) {
+                        datetime = profile.scraped_at || 'Unknown';
+                    }
+                    
+                    // Safely extract profile URL components
+                    const profileUrl = profile.url || '#';
+                    const profileId = profileUrl.includes('/in/') ? 
+                                      profileUrl.split('/in/')[1] : 
+                                      profileUrl;
                     
                     html += `
                         <tr>
                             <td>${index}</td>
-                            <td>${profile.name}</td>
-                            <td><a href="${profile.url}" target="_blank">${profile.url.split('/in/')[1]}</a></td>
+                            <td>${profile.name || 'Unknown'}</td>
+                            <td><a href="${profileUrl}" target="_blank">${profileId}</a></td>
                             <td>${datetime}</td>
                         </tr>
                     `;
