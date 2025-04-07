@@ -25,6 +25,14 @@
                 <h2><i class="fas fa-search"></i> Search Parameters</h2>
                 <form id="scrapeForm">
                     <div class="form-group">
+                        <label for="email">LinkedIn Email</label>
+                        <input type="email" id="email" placeholder="Enter your LinkedIn email" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="password">LinkedIn Password</label>
+                        <input type="password" id="password" placeholder="Enter your LinkedIn password" required>
+                    </div>
+                    <div class="form-group">
                         <label for="keyword">Job Title</label>
                         <input type="text" id="keyword" placeholder="e.g. Data Scientist, Software Engineer">
                     </div>
@@ -105,7 +113,7 @@
     </div>
 
     <footer>
-        <p>&copy; 2025 LinkedIn Profile Scraper</p>
+        <p>© 2025 LinkedIn Profile Scraper</p>
     </footer>
 
     <script>
@@ -143,8 +151,15 @@
                     return;
                 }
                 
+                const email = document.getElementById('email').value.trim();
+                const password = document.getElementById('password').value.trim();
                 const keyword = document.getElementById('keyword').value.trim() || 'Data Scientist';
                 const location = document.getElementById('location').value.trim() || 'New Delhi';
+                
+                if (!email || !password) {
+                    showToast("Please enter both email and password", "error");
+                    return;
+                }
                 
                 setStatus('Scraping...', 'active');
                 startScrapeBtn.disabled = true;
@@ -155,7 +170,7 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ keyword, location })
+                    body: JSON.stringify({ email, password, keyword, location })
                 })
                 .then(response => {
                     if (!response.ok) {
@@ -170,12 +185,9 @@
                     } else {
                         showToast(`Scraping started for ${keyword} in ${location}`);
                         setStatus('Scraping', 'active');
-                        // Start polling for new profiles
                         const pollInterval = setInterval(() => {
                             loadProfiles();
                         }, 10000);
-                        
-                        // After 2 minutes, clear the interval and enable the button
                         setTimeout(() => {
                             clearInterval(pollInterval);
                             startScrapeBtn.disabled = false;
@@ -266,21 +278,16 @@
                 for (let i = start; i < end; i++) {
                     const profile = profiles[i];
                     const index = i + 1;
-                    
-                    // Handle potential date format issues
                     let datetime;
                     try {
                         datetime = new Date(profile.scraped_at).toLocaleString();
                     } catch (e) {
                         datetime = profile.scraped_at || 'Unknown';
                     }
-                    
-                    // Safely extract profile URL components
                     const profileUrl = profile.url || '#';
                     const profileId = profileUrl.includes('/in/') ? 
                                       profileUrl.split('/in/')[1] : 
                                       profileUrl;
-                    
                     html += `
                         <tr>
                             <td>${index}</td>
@@ -308,18 +315,13 @@
             function showToast(message, type = 'success') {
                 const toastMessage = document.querySelector('.toast-message');
                 toastMessage.textContent = message;
-                
                 toast.className = 'toast';
                 if (type !== 'success') {
                     toast.classList.add(type);
                 }
-                
-                // Show the toast
                 setTimeout(() => {
                     toast.classList.remove('hidden');
                 }, 100);
-                
-                // Hide the toast after 3 seconds
                 setTimeout(() => {
                     toast.classList.add('hidden');
                 }, 3000);
