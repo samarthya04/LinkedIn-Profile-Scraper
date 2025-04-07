@@ -105,14 +105,13 @@
     </div>
 
     <footer>
-        <p>© 2025 LinkedIn Profile Scraper</p>
+        <p>&copy; 2025 LinkedIn Profile Scraper</p>
     </footer>
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const statusIndicator = document.getElementById('status-indicator');
             const statusText = document.getElementById('status');
-            const scrapeForm = document.getElementById('scrapeForm');
             const startScrapeBtn = document.getElementById('start-scrape');
             const refreshProfilesBtn = document.getElementById('refresh-profiles');
             const exportProfilesBtn = document.getElementById('export-profiles');
@@ -123,10 +122,12 @@
             const nextPageBtn = document.getElementById('next-page');
             const pageIndicator = document.getElementById('page-indicator');
             const toast = document.getElementById('toast');
+            const scrapeForm = document.getElementById('scrapeForm');
             
             let profiles = [];
             let currentPage = 1;
             const profilesPerPage = 10;
+            let isScrapingInProgress = false;
             
             // Load profiles on page load
             loadProfiles();
@@ -136,11 +137,18 @@
             
             scrapeForm.addEventListener('submit', function(e) {
                 e.preventDefault();
+                
+                if (isScrapingInProgress) {
+                    showToast("A scraping job is already in progress", "info");
+                    return;
+                }
+                
                 const keyword = document.getElementById('keyword').value.trim() || 'Data Scientist';
                 const location = document.getElementById('location').value.trim() || 'New Delhi';
                 
                 setStatus('Scraping...', 'active');
                 startScrapeBtn.disabled = true;
+                isScrapingInProgress = true;
                 
                 fetch('/start_scrape', {
                     method: 'POST',
@@ -151,24 +159,38 @@
                 })
                 .then(response => {
                     if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                        throw new Error(`Status: ${response.status}`);
                     }
                     return response.json();
                 })
                 .then(data => {
                     if (data.status === "error") {
-                        throw new Error(data.message);
+                        showToast(`Error: ${data.message}`, 'error');
+                        setStatus('Error', 'error');
+                    } else {
+                        showToast(`Scraping started for ${keyword} in ${location}`);
+                        setStatus('Scraping', 'active');
+                        // Start polling for new profiles
+                        const pollInterval = setInterval(() => {
+                            loadProfiles();
+                        }, 10000);
+                        
+                        // After 2 minutes, clear the interval and enable the button
+                        setTimeout(() => {
+                            clearInterval(pollInterval);
+                            startScrapeBtn.disabled = false;
+                            isScrapingInProgress = false;
+                            setStatus('Ready', 'success');
+                            loadProfiles();
+                        }, 120000);
                     }
-                    showToast(`Scraping started for "${keyword}" in "${location}"`);
-                    setStatus('Ready', 'success');
-                    startScrapeBtn.disabled = false;
-                    loadProfiles();
                 })
                 .catch(error => {
                     console.error('Error:', error);
                     showToast('Error: ' + error.message, 'error');
                     setStatus('Error', 'error');
                     startScrapeBtn.disabled = false;
+                    isScrapingInProgress = false;
                 });
             });
             
@@ -180,14 +202,10 @@
                     return;
                 }
                 
-                const keyword = document.getElementById('keyword').value.trim() || 'unknown';
-                const location = document.getElementById('location').value.trim() || 'unknown';
-                const filename = `linkedin_profiles_${keyword}_${location}.json`.replace(/[^a-zA-Z0-9_]/g, '_');
-                
                 const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(profiles, null, 2));
                 const downloadAnchorNode = document.createElement('a');
                 downloadAnchorNode.setAttribute("href", dataStr);
-                downloadAnchorNode.setAttribute("download", filename);
+                downloadAnchorNode.setAttribute("download", "linkedin_profiles.json");
                 document.body.appendChild(downloadAnchorNode);
                 downloadAnchorNode.click();
                 downloadAnchorNode.remove();
@@ -214,7 +232,7 @@
                 fetch('/profiles')
                     .then(response => {
                         if (!response.ok) {
-                            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                            throw new Error(`Status: ${response.status}`);
                         }
                         return response.json();
                     })
@@ -249,6 +267,7 @@
                     const profile = profiles[i];
                     const index = i + 1;
                     
+                    // Handle potential date format issues
                     let datetime;
                     try {
                         datetime = new Date(profile.scraped_at).toLocaleString();
@@ -256,10 +275,11 @@
                         datetime = profile.scraped_at || 'Unknown';
                     }
                     
+                    // Safely extract profile URL components
                     const profileUrl = profile.url || '#';
                     const profileId = profileUrl.includes('/in/') ? 
-                                    profileUrl.split('/in/')[1].split('/')[0] : 
-                                    profileUrl;
+                                      profileUrl.split('/in/')[1] : 
+                                      profileUrl;
                     
                     html += `
                         <tr>
@@ -277,31 +297,31 @@
                 pageIndicator.textContent = `Page ${currentPage} of ${maxPages}`;
             }
             
-            function setStatus(message, type) {
-                statusText.textContent = message;
+            function setStatus(text, statusClass) {
+                statusText.textContent = text;
                 statusIndicator.className = 'status-indicator';
-                if (type) {
-                    statusIndicator.classList.add(type);
+                if (statusClass) {
+                    statusIndicator.classList.add(statusClass);
                 }
             }
             
             function showToast(message, type = 'success') {
-                const toastEl = document.getElementById('toast');
                 const toastMessage = document.querySelector('.toast-message');
-                const toastIcon = document.querySelector('.toast-icon');
-                
                 toastMessage.textContent = message;
-                toastEl.className = 'toast';
-                toastEl.classList.add(type);
                 
-                toastIcon.className = type === 'error' ? 
-                    'fas fa-exclamation-circle toast-icon' : 
-                    'fas fa-check-circle toast-icon';
+                toast.className = 'toast';
+                if (type !== 'success') {
+                    toast.classList.add(type);
+                }
                 
-                toastEl.classList.remove('hidden');
-                
+                // Show the toast
                 setTimeout(() => {
-                    toastEl.classList.add('hidden');
+                    toast.classList.remove('hidden');
+                }, 100);
+                
+                // Hide the toast after 3 seconds
+                setTimeout(() => {
+                    toast.classList.add('hidden');
                 }, 3000);
             }
         });
