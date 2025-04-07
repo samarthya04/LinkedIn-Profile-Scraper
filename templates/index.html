@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LinkedIn Profile Scraper</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <div class="card p-4">
+            <h2 class="text-center mb-4">LinkedIn Profile Scraper</h2>
+            <form id="scrapeForm">
+                <div class="mb-3">
+                    <label for="keyword" class="form-label">Keyword</label>
+                    <input type="text" class="form-control" id="keyword" name="keyword" value="Data Scientist">
+                </div>
+                <div class="mb-3">
+                    <label for="location" class="form-label">Location</label>
+                    <input type="text" class="form-control" id="location" name="location" value="New Delhi">
+                </div>
+                <button type="submit" class="btn btn-primary w-100">Start Scraping</button>
+            </form>
+            <div id="status" class="mt-3 text-center"></div>
+            <button class="btn btn-secondary w-100 mt-3" onclick="loadProfiles()">Load Profiles</button>
+            <div id="profiles"></div>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const keyword = document.getElementById('keyword').value;
+            const location = document.getElementById('location').value;
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerHTML = 'Starting...';
+            const response = await fetch('/start_scrape', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ keyword, location })
+            });
+            const result = await response.json();
+            statusDiv.innerHTML = `${result.status} for ${result.keyword} in ${result.location}`;
+        });
+
+        async function loadProfiles() {
+            const response = await fetch('/profiles');
+            const profiles = await response.json();
+            const profilesDiv = document.getElementById('profiles');
+            profilesDiv.innerHTML = '<h3 class="mt-3">Scraped Profiles</h3>' + profiles.map(p => 
+                `<div class="card mb-2 p-2"><a href="${p.url}" target="_blank">${p.name}</a> (Scraped: ${p.scraped_at})</div>`
+            ).join('');
+        }
+    </script>
+</body>
+</html>
