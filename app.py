@@ -18,16 +18,16 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import threading
 
-# Configure logging
+# Configure logging for Render (stdout/stderr)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler('profile_scraper.log'), logging.StreamHandler()]
+    handlers=[logging.StreamHandler()]
 )
 
 load_dotenv()
 
-# Initialize Flask app
+# Initialize Flask app with static and template folders
 app = Flask(__name__, static_folder='static', template_folder='templates')
 
 # OpenRouter LLM Client
@@ -35,7 +35,7 @@ class LLMClient:
     def __init__(self):
         api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
-            raise ValueError("OPENROUTER_API_KEY not found in .env")
+            raise ValueError("OPENROUTER_API_KEY not found in environment")
         self.client = AsyncOpenAI(
             api_key=api_key,
             base_url="https://openrouter.ai/api/v1"
@@ -58,19 +58,19 @@ class LLMClient:
             return {"action": action, "reasoning": reasoning}
         except Exception as e:
             logging.error(f"OpenRouter API query failed: {str(e)}")
-            return {"action": "2", "reasoning": "Default scrape due to OpenRouter API error"}
+            return {"action": "2", "reasoning": "Default scrape due to API error"}
 
-# Search keys
+# Search keys from environment variables
 search_keys = { 
     "username": os.getenv("LINKEDIN_EMAIL"),
     "password": os.getenv("LINKEDIN_PASSWORD"),
     "keywords": os.getenv("SEARCH_KEYWORDS", "Data Scientist,Software Engineer").split(","),
     "locations": os.getenv("SEARCH_LOCATIONS", "New Delhi,Bhubaneswar").split(","),
-    "filename": os.getenv("OUTPUT_FILENAME", "profiles.json")
+    "filename": os.getenv("OUTPUT_FILENAME", "/tmp/profiles.json")  # Use /tmp for Render
 }
 
 if not search_keys["username"] or not search_keys["password"]:
-    raise ValueError("LINKEDIN_EMAIL or LINKEDIN_PASSWORD not found in .env")
+    raise ValueError("LINKEDIN_EMAIL or LINKEDIN_PASSWORD not found in environment")
 
 logging.info(f"Loaded credentials - Username: {search_keys['username']}")
 
@@ -102,7 +102,7 @@ class LinkedInProfileScraper:
     def __init__(self, search_keys, llm_client, headless=True):
         self.search_keys = search_keys
         self.llm = llm_client
-        self.db_conn = sqlite3.connect('linkedin_profiles.db', check_same_thread=False)
+        self.db_conn = sqlite3.connect('/tmp/linkedin_profiles.db', check_same_thread=False)  # Use /tmp for Render
         self._init_db()
         self.max_profiles = int(os.getenv("MAX_PROFILES", 200))
         self.headless = headless
@@ -148,18 +148,15 @@ class LinkedInProfileScraper:
 
     def get_chrome_options(self):
         options = webdriver.ChromeOptions()
+        options.binary_location = os.getenv("CHROME_BINARY_PATH", "/usr/bin/chromium")  # Render's Chromium path
         options.add_argument(f"user-agent={random.choice(self.user_agents)}")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
-        # Additional anti-detection measures
-        options.add_argument("--disable-extensions")
-        options.add_argument("--start-maximized")
-        options.add_argument("--disable-infobars")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--headless=new")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
-        if self.headless:
-            options.add_argument("--headless=new")  # Newer headless mode
         return options
 
     async def login(self, driver, max_retries=3):
@@ -182,30 +179,16 @@ class LinkedInProfileScraper:
                 logging.info("Clicked login button")
 
                 try:
-                    WebDriverWait(driver, 120).until(  # Increased timeout to 2 minutes
+                    WebDriverWait(driver, 120).until(
                         EC.presence_of_element_located((By.ID, "global-nav"))
                     )
                     logging.info("Login successful")
                     break
                 except TimeoutException:
-                    # Check for CAPTCHA
-                    captcha_present = len(driver.find_elements(By.XPATH, "//iframe[contains(@src, 'captcha')]")) > 0
-                    if captcha_present and not self.headless:
-                        logging.warning("CAPTCHA detected. Please solve it manually in the browser.")
-                        WebDriverWait(driver, 300).until(  # 5-minute window for manual solving
-                            EC.presence_of_element_located((By.ID, "global-nav"))
-                        )
-                        logging.info("Login successful after CAPTCHA resolution")
-                        break
-                    else:
-                        logging.warning(f"Login attempt {attempt + 1}/{max_retries} failed: Timeout or CAPTCHA required")
-                        if attempt == max_retries - 1:
-                            raise Exception("Login failed - CAPTCHA or timeout after retries")
-                        self._human_like_delay()  # Wait before retrying
-            except TimeoutException:
-                logging.warning(f"Login attempt {attempt + 1}/{max_retries} failed: Timeout waiting for login page")
-                if attempt == max_retries - 1:
-                    raise Exception("Login failed - Timeout waiting for login page after retries")
+                    logging.warning(f"Login attempt {attempt + 1}/{max_retries} failed: Timeout")
+                    if attempt == max_retries - 1:
+                        raise Exception("Login failed - Timeout or CAPTCHA after retries")
+                    self._human_like_delay()
             except Exception as e:
                 logging.error(f"Login failed: {str(e)}")
                 raise
@@ -370,16 +353,14 @@ class LinkedInProfileScraper:
         
         updated_profiles = existing_profiles + [p for p in profiles if p not in existing_profiles]
         
-        with open(self.search_keys["filename"], 'w') as f:
+        with open(self.search_keys["fullname"], 'w') as f:
             json.dump(updated_profiles, f, indent=2)
         return updated_profiles
 
 # Flask Routes
 @app.route('/')
 def index():
-    # Optional: Uncomment if you have templates/index.html
-    return render_template('index.html')
-    # return jsonify({"message": "Welcome to LinkedIn Profile Scraper. Use /start_scrape to begin."})
+    return render_template('index.html')  # Serve the frontend
 
 @app.route('/start_scrape', methods=['POST'])
 def start_scrape():
@@ -388,7 +369,7 @@ def start_scrape():
     location = data.get('location', search_keys["locations"][0])
     
     llm_client = LLMClient()
-    scraper = LinkedInProfileScraper(search_keys, llm_client, headless=True)  # Set to False for manual CAPTCHA solving
+    scraper = LinkedInProfileScraper(search_keys, llm_client, headless=True)
     
     def run_scraper():
         driver = webdriver.Chrome(options=scraper.get_chrome_options())
@@ -421,6 +402,5 @@ def get_profiles():
         return jsonify([])
 
 if __name__ == "__main__":
-    # For local testing only; Render uses Gunicorn
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
