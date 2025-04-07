@@ -145,14 +145,14 @@ class LinkedInProfileScraper:
 
     def get_chrome_options(self):
         options = webdriver.ChromeOptions()
-        options.binary_location = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
+        options.binary_location = "/usr/bin/google-chrome"  # Explicit Chrome path for Render
         options.add_argument(f"user-agent={random.choice(self.user_agents)}")
         options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-gpu")
+        options.add_argument("--no-sandbox")  # Required for Render
+        options.add_argument("--disable-dev-shm-usage")  # Avoids /dev/shm issues
+        options.add_argument("--disable-gpu")  # Often needed in headless mode
         if self.headless:
-            options.add_argument("--headless")
+            options.add_argument("--headless=new")  # Updated headless flag
         return options
 
     async def login(self, driver):
