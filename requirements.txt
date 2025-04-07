@@ -1,8 +1,7 @@
 flask
-selenium
-webdriver-manager
-requests-html
-lxml_html_clean==0.1.1
 python-dotenv
+openai
+requests-html
+sqlite3
 openai
 gunicorn
