@@ -23,17 +23,19 @@
         <main>
             <div class="card search-card">
                 <h2><i class="fas fa-search"></i> Search Parameters</h2>
-                <div class="form-group">
-                    <label for="keyword">Job Title</label>
-                    <input type="text" id="keyword" placeholder="e.g. Data Scientist, Software Engineer">
-                </div>
-                <div class="form-group">
-                    <label for="location">Location</label>
-                    <input type="text" id="location" placeholder="e.g. New Delhi, Bhubaneswar">
-                </div>
-                <button id="start-scrape" class="btn primary">
-                    <i class="fas fa-play"></i> Start Scraping
-                </button>
+                <form id="scrapeForm">
+                    <div class="form-group">
+                        <label for="keyword">Job Title</label>
+                        <input type="text" id="keyword" placeholder="e.g. Data Scientist, Software Engineer">
+                    </div>
+                    <div class="form-group">
+                        <label for="location">Location</label>
+                        <input type="text" id="location" placeholder="e.g. New Delhi, Bhubaneswar">
+                    </div>
+                    <button type="submit" id="start-scrape" class="btn primary">
+                        <i class="fas fa-play"></i> Start Scraping
+                    </button>
+                </form>
             </div>
 
             <div class="card stats-card">
@@ -103,30 +105,14 @@
     </div>
 
     <footer>
-        <p>&copy; 2025 LinkedIn Profile Scraper</p>
+        <p>© 2025 LinkedIn Profile Scraper</p>
     </footer>
 
     <script>
-        document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const keyword = document.getElementById('keyword').value;
-        const location = document.getElementById('location').value;
-
-        const response = await fetch('/start_scrape', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ keyword, location })
-        });
-        const result = await response.json();
-        if (result.status === "error") {
-            alert(`Error: ${result.message}`);
-        } else {
-            alert(result.status);
-        }
-    });
         document.addEventListener('DOMContentLoaded', function() {
             const statusIndicator = document.getElementById('status-indicator');
             const statusText = document.getElementById('status');
+            const scrapeForm = document.getElementById('scrapeForm');
             const startScrapeBtn = document.getElementById('start-scrape');
             const refreshProfilesBtn = document.getElementById('refresh-profiles');
             const exportProfilesBtn = document.getElementById('export-profiles');
@@ -148,7 +134,8 @@
             // Setup refresh interval
             setInterval(loadProfiles, 60000); // Refresh every minute
             
-            startScrapeBtn.addEventListener('click', function() {
+            scrapeForm.addEventListener('submit', function(e) {
+                e.preventDefault();
                 const keyword = document.getElementById('keyword').value.trim() || 'Data Scientist';
                 const location = document.getElementById('location').value.trim() || 'New Delhi';
                 
@@ -164,12 +151,15 @@
                 })
                 .then(response => {
                     if (!response.ok) {
-                        throw new Error(`Status: ${response.status}`);
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                     }
                     return response.json();
                 })
                 .then(data => {
-                    showToast(`Scraping completed for ${keyword} in ${location}`);
+                    if (data.status === "error") {
+                        throw new Error(data.message);
+                    }
+                    showToast(`Scraping started for "${keyword}" in "${location}"`);
                     setStatus('Ready', 'success');
                     startScrapeBtn.disabled = false;
                     loadProfiles();
@@ -190,10 +180,14 @@
                     return;
                 }
                 
+                const keyword = document.getElementById('keyword').value.trim() || 'unknown';
+                const location = document.getElementById('location').value.trim() || 'unknown';
+                const filename = `linkedin_profiles_${keyword}_${location}.json`.replace(/[^a-zA-Z0-9_]/g, '_');
+                
                 const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(profiles, null, 2));
                 const downloadAnchorNode = document.createElement('a');
                 downloadAnchorNode.setAttribute("href", dataStr);
-                downloadAnchorNode.setAttribute("download", "linkedin_profiles.json");
+                downloadAnchorNode.setAttribute("download", filename);
                 document.body.appendChild(downloadAnchorNode);
                 downloadAnchorNode.click();
                 downloadAnchorNode.remove();
@@ -220,7 +214,7 @@
                 fetch('/profiles')
                     .then(response => {
                         if (!response.ok) {
-                            throw new Error(`Status: ${response.status}`);
+                            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                         }
                         return response.json();
                     })
@@ -255,7 +249,6 @@
                     const profile = profiles[i];
                     const index = i + 1;
                     
-                    // Handle potential date format issues
                     let datetime;
                     try {
                         datetime = new Date(profile.scraped_at).toLocaleString();
@@ -263,11 +256,10 @@
                         datetime = profile.scraped_at || 'Unknown';
                     }
                     
-                    // Safely extract profile URL components
                     const profileUrl = profile.url || '#';
                     const profileId = profileUrl.includes('/in/') ? 
-                                      profileUrl.split('/in/')[1] : 
-                                      profileUrl;
+                                    profileUrl.split('/in/')[1].split('/')[0] : 
+                                    profileUrl;
                     
                     html += `
                         <tr>
@@ -302,11 +294,9 @@
                 toastEl.className = 'toast';
                 toastEl.classList.add(type);
                 
-                if (type === 'error') {
-                    toastIcon.className = 'fas fa-exclamation-circle toast-icon';
-                } else {
-                    toastIcon.className = 'fas fa-check-circle toast-icon';
-                }
+                toastIcon.className = type === 'error' ? 
+                    'fas fa-exclamation-circle toast-icon' : 
+                    'fas fa-check-circle toast-icon';
                 
                 toastEl.classList.remove('hidden');
                 
