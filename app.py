@@ -44,7 +44,6 @@ class LLMClient:
     async def query(self, prompt):
         try:
             if not os.getenv("OPENROUTER_API_KEY"):
-                # Fallback logic if no API key
                 return {"action": "2", "reasoning": "Default scrape because no API key is available"}
                 
             response = await self.client.chat.completions.create(
@@ -150,26 +149,57 @@ class LinkedInProfileScraper:
                              profile['url'], profile['timestamp']))
         self.export_to_json()
 
+    def _human_like_typing(self, element, text):
+        for char in text:
+            element.send_keys(char)
+            time.sleep(random.uniform(0.05, 0.25))
+
     def _human_like_delay(self):
-        delay = random.uniform(5, 10)
-        if self._count_profiles() > 100:
-            delay *= 1.5
-        time.sleep(delay)
+        base_delay = random.uniform(3, 7)
+        if random.random() < 0.2:
+            base_delay += random.uniform(5, 15)
+        profile_count = self._count_profiles()
+        if profile_count > 50:
+            base_delay *= 1.2
+        if profile_count > 100:
+            base_delay *= 1.5
+        if profile_count > 150:
+            base_delay *= 1.8
+        actual_delay = base_delay * random.uniform(0.8, 1.2)
+        if random.random() < 0.1:
+            actual_delay += random.uniform(15, 30)
+        logging.info(f"Waiting for {actual_delay:.2f} seconds")
+        time.sleep(actual_delay)
+
+    def _randomize_browser_behavior(self, driver):
+        driver.execute_script("""
+            var event = new MouseEvent('mousemove', {
+                'view': window,
+                'bubbles': true,
+                'cancelable': true,
+                'clientX': Math.floor(Math.random() * 1920),
+                'clientY': Math.floor(Math.random() * 1080)
+            });
+            document.dispatchEvent(event);
+        """)
+        time.sleep(random.uniform(0.5, 1.5))
 
     def get_chrome_options(self):
         options = webdriver.ChromeOptions()
-        
-        # Chrome binary path for Render
         chrome_binary = os.getenv("CHROME_BINARY_PATH", "/usr/bin/google-chrome-stable")
         if os.path.exists(chrome_binary):
             options.binary_location = chrome_binary
-        
         options.add_argument(f"user-agent={random.choice(self.user_agents)}")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
         options.add_argument("--headless=new")
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("--start-maximized")
+        options.add_argument("--disable-notifications")
+        options.add_argument("--disable-infobars")
+        options.add_argument("--disable-extensions")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
         return options
@@ -177,40 +207,56 @@ class LinkedInProfileScraper:
     async def login(self, driver, max_retries=3):
         for attempt in range(max_retries):
             try:
-                driver.get("https://www.linkedin.com/login")
-                logging.info("Loading login page")
+                logging.info(f"Login attempt {attempt + 1}/{max_retries}")
+                driver.delete_all_cookies()
+                driver.get("https://www.linkedin.com")
+                self._human_like_delay()
                 
-                WebDriverWait(driver, 30).until(
+                try:
+                    sign_in = WebDriverWait(driver, 10).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, "a[data-tracking-control-name='guest_homepage-basic_nav-header-signin']"))
+                    )
+                    sign_in.click()
+                    logging.info("Clicked sign in from homepage")
+                except Exception:
+                    driver.get("https://www.linkedin.com/login")
+                    logging.info("Navigated directly to login page")
+                
+                WebDriverWait(driver, 60).until(
                     EC.presence_of_element_located((By.ID, "username"))
                 )
                 email_field = driver.find_element(By.ID, "username")
-                email_field.send_keys(self.search_keys["username"])
-                logging.info("Entered username")
-
+                self._human_like_typing(email_field, self.search_keys["username"])
+                time.sleep(random.uniform(1.5, 3.0))
                 password_field = driver.find_element(By.ID, "password")
-                password_field.send_keys(self.search_keys["password"])
-                logging.info("Entered password")
-
+                self._human_like_typing(password_field, self.search_keys["password"])
+                time.sleep(random.uniform(1.5, 3.0))
+                
+                self._randomize_browser_behavior(driver)
                 login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
                 login_button.click()
                 logging.info("Clicked login button")
-
+                
                 try:
-                    WebDriverWait(driver, 120).until(
-                        EC.presence_of_element_located((By.ID, "global-nav"))
+                    WebDriverWait(driver, 180).until(
+                        EC.any_of(
+                            EC.presence_of_element_located((By.ID, "global-nav")),
+                            EC.presence_of_element_located((By.ID, "voyager-feed")),
+                            EC.presence_of_element_located((By.CSS_SELECTOR, ".feed-container"))
+                        )
                     )
                     logging.info("Login successful")
+                    self._randomize_browser_behavior(driver)
                     break
                 except TimeoutException:
-                    logging.warning(f"Login attempt {attempt + 1}/{max_retries} failed: Timeout")
+                    logging.warning(f"Login attempt {attempt + 1} failed: Timeout")
                     if attempt == max_retries - 1:
                         raise Exception("Login failed - Timeout or CAPTCHA after retries")
-                    self._human_like_delay()
             except Exception as e:
-                logging.error(f"Login failed: {str(e)}")
+                logging.error(f"Login attempt failed: {str(e)}")
                 if attempt == max_retries - 1:
                     raise
-                self._human_like_delay()
+                time.sleep(random.uniform(30, 60))
         self._human_like_delay()
 
     async def navigate_to_people_search(self, driver):
@@ -251,11 +297,7 @@ class LinkedInProfileScraper:
             next_button = False
             if next_button_exists:
                 next_button = driver.find_element(By.CSS_SELECTOR, "button[aria-label='Next']").is_enabled()
-        except NoSuchElementException:
-            next_button = False
-            profile_cards = 0
-        except Exception as e:
-            logging.error(f"Error detecting elements: {str(e)}")
+        except Exception:
             profile_cards = 0
             next_button = False
 
@@ -275,46 +317,61 @@ class LinkedInProfileScraper:
         """
         decision = await self.llm.query(prompt)
         
+        if decision["action"] not in ["1", "2", "3"]:
+            return {
+                "action": "2" if profile_cards > 0 else "1" if next_button else "3",
+                "reasoning": "Fallback: Invalid LLM response, choosing based on page state"
+            }
+        
         if decision["action"] == "3" and profile_count < self.max_profiles and (next_button or profile_cards > 0):
-            return {"action": "1" if next_button else "2", 
-                    "reasoning": "Override: Less than max profiles, continuing with next page or scrape."}
+            return {
+                "action": "1" if next_button else "2",
+                "reasoning": "Override: Less than max profiles, continuing with next page or scrape"
+            }
         return decision
 
-    async def scrape_profiles(self, driver, memory):
-        profiles = []
-        try:
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(5)
-            WebDriverWait(driver, 60).until(
-                EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '/in/')]"))
-            )
-            links = driver.find_elements(By.XPATH, "//a[contains(@href, '/in/')]")
-            for link in links:
-                if self._count_profiles() >= self.max_profiles:
-                    break
-                try:
-                    url = link.get_attribute("href").split("?")[0]
-                    if "/in/" not in url or url in memory.state['visited_urls']:
+    async def scrape_profiles(self, driver, memory, retries=2):
+        for attempt in range(retries):
+            try:
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(5)
+                WebDriverWait(driver, 60).until(
+                    EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '/in/')]"))
+                )
+                links = driver.find_elements(By.XPATH, "//a[contains(@href, '/in/')]")
+                profiles = []
+                for link in links:
+                    if self._count_profiles() >= self.max_profiles:
+                        break
+                    try:
+                        url = link.get_attribute("href").split("?")[0]
+                        if "/in/" not in url or url in memory.state['visited_urls']:
+                            continue
+                        name_elem = link.find_element(By.XPATH, ".//span[contains(@class, 'entity-result__title-text')] | .//span")
+                        name = name_elem.text.strip()
+                        if name and "linkedin.com/in/" in url:
+                            profile_id = url.split('/in/')[-1].strip('/')
+                            if not self._profile_exists(profile_id):
+                                profiles.append({
+                                    'id': profile_id,
+                                    'name': name,
+                                    'url': url,
+                                    'timestamp': datetime.now().isoformat()
+                                })
+                                memory.state['visited_urls'].add(url)
+                                logging.info(f"Scraped profile: {name} - {url}")
+                    except Exception as e:
+                        logging.debug(f"Error processing link: {str(e)}")
                         continue
-                    name_elem = link.find_element(By.XPATH, ".//span[contains(@class, 'entity-result__title-text')] | .//span")
-                    name = name_elem.text.strip()
-                    if name and "linkedin.com/in/" in url:
-                        profile_id = url.split('/in/')[-1].strip('/')
-                        if not self._profile_exists(profile_id):
-                            profiles.append({
-                                'id': profile_id,
-                                'name': name,
-                                'url': url,
-                                'timestamp': datetime.now().isoformat()
-                            })
-                            memory.state['visited_urls'].add(url)
-                            logging.info(f"Scraped profile: {name} - {url}")
-                except Exception as e:
-                    logging.debug(f"Error processing link: {str(e)}")
-                    continue
-        except TimeoutException:
-            logging.error("Timeout waiting for profile links")
-        return profiles
+                self._randomize_browser_behavior(driver)
+                return profiles
+            except TimeoutException:
+                logging.warning(f"Attempt {attempt + 1}/{retries} failed: Timeout waiting for profile links")
+                if attempt == retries - 1:
+                    logging.error("Max retries reached for scraping profiles")
+                    return []
+                self._human_like_delay()
+        return []
 
     async def click_next_with_retry(self, driver, retries=3):
         for attempt in range(retries):
@@ -324,6 +381,7 @@ class LinkedInProfileScraper:
                 )
                 next_button.click()
                 self._human_like_delay()
+                self._randomize_browser_behavior(driver)
                 return True
             except Exception as e:
                 logging.warning(f"Retry {attempt+1}/{retries} for next button: {str(e)}")
