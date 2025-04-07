@@ -145,11 +145,12 @@ class LinkedInProfileScraper:
 
     def get_chrome_options(self):
         options = webdriver.ChromeOptions()
-        options.binary_location = "/usr/bin/google-chrome"  # Specify Chrome binary location
+        options.binary_location = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
         options.add_argument(f"user-agent={random.choice(self.user_agents)}")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
         if self.headless:
             options.add_argument("--headless")
         return options
@@ -375,21 +376,23 @@ def index():
 
 @app.route('/start_scrape', methods=['POST'])
 def start_scrape():
-    data = request.get_json()
+    data = request.get_json() or {}
     keyword = data.get('keyword', 'Data Scientist')
     location = data.get('location', 'New Delhi')
     llm_client = LLMClient()
     scraper = LinkedInProfileScraper(search_keys, llm_client, headless=True)
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=scraper.get_chrome_options())
-    memory = ScraperMemory()
+    driver = None
     try:
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=scraper.get_chrome_options())
+        memory = ScraperMemory()
         asyncio.run(scraper.run_search(driver, keyword, location, memory))
         return jsonify({"status": "Scraping completed", "keyword": keyword, "location": location})
     except Exception as e:
         logging.error(f"Scraping failed: {str(e)}")
         return jsonify({"status": "Scraping failed", "error": str(e)}), 500
     finally:
-        driver.quit()
+        if driver:
+            driver.quit()
 
 @app.route('/profiles', methods=['GET'])
 def get_profiles():
@@ -399,4 +402,5 @@ def get_profiles():
     return jsonify(profiles)
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
