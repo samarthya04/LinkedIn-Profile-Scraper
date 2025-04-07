@@ -3,12 +3,12 @@ services:
     name: linkedin-scraper-backend
     env: python
     region: oregon
-    plan: free # or starter, depending on your needs
+    plan: free
     buildCommand: pip install -r backend/requirements.txt
-    startCommand: gunicorn backend.app:app
+    startCommand: cd backend && gunicorn app:app
     envVars:
       - key: OPENROUTER_API_KEY
-        sync: false # Set manually in Render dashboard
+        sync: false
       - key: LINKEDIN_EMAIL
         sync: false
       - key: LINKEDIN_PASSWORD
