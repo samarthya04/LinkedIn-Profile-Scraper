@@ -107,6 +107,23 @@
     </footer>
 
     <script>
+        document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const keyword = document.getElementById('keyword').value;
+        const location = document.getElementById('location').value;
+
+        const response = await fetch('/start_scrape', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keyword, location })
+        });
+        const result = await response.json();
+        if (result.status === "error") {
+            alert(`Error: ${result.message}`);
+        } else {
+            alert(result.status);
+        }
+    });
         document.addEventListener('DOMContentLoaded', function() {
             const statusIndicator = document.getElementById('status-indicator');
             const statusText = document.getElementById('status');
