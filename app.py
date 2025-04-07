@@ -9,65 +9,54 @@ import os
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 import hashlib
-from flask import Flask, request, jsonify, render_template
-from requests_html import AsyncHTMLSession
-import signal
-import threading
+from selenium import webdriver
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
-# Configure logging for cloud environments
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
+    handlers=[logging.FileHandler('profile_scraper.log'), logging.StreamHandler()]
 )
 
-# Load environment variables
 load_dotenv()
-
-# Initialize Flask app
-app = Flask(__name__, static_folder='static', template_folder='templates')
 
 # OpenRouter LLM Client
 class LLMClient:
     def __init__(self):
         api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
-            logging.error("OPENROUTER_API_KEY not found in environment variables")
-            raise ValueError("OPENROUTER_API_KEY not found")
+            raise ValueError("OPENROUTER_API_KEY not found in .env")
         self.client = AsyncOpenAI(
             api_key=api_key,
             base_url="https://openrouter.ai/api/v1"
         )
-        self.retries = 3
-        self.backoff_factor = 2
 
     async def query(self, prompt):
-        attempts = 0
-        while attempts < self.retries:
-            try:
-                response = await self.client.chat.completions.create(
-                    model="openai/gpt-3.5-turbo",
-                    max_tokens=150,
-                    temperature=0.5,
-                    messages=[
-                        {"role": "system", "content": "You are an AI assistant helping to decide actions for a LinkedIn profile scraper."},
-                        {"role": "user", "content": prompt}
-                    ]
-                )
-                content = response.choices[0].message.content.strip()
-                action = content.split("Action: ")[1].split("\n")[0].strip()
-                reasoning = content.split("Reasoning: ")[1].strip()
-                return {"action": action, "reasoning": reasoning}
-            except Exception as e:
-                attempts += 1
-                wait_time = self.backoff_factor ** attempts
-                logging.warning(f"API attempt {attempts} failed: {str(e)}. Retrying in {wait_time}s...")
-                await asyncio.sleep(wait_time)
-        logging.error("All API retries failed")
-        return {"action": "2", "reasoning": "Default scrape due to persistent API errors"}
+        try:
+            response = await self.client.chat.completions.create(
+                model="openai/gpt-3.5-turbo",
+                max_tokens=150,
+                temperature=0.5,
+                messages=[
+                    {"role": "system", "content": "You are an AI assistant helping to decide actions for a LinkedIn profile scraper."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            content = response.choices[0].message.content.strip()
+            action = content.split("Action: ")[1].split("\n")[0]
+            reasoning = content.split("Reasoning: ")[1]
+            return {"action": action, "reasoning": reasoning}
+        except Exception as e:
+            logging.error(f"OpenRouter API query failed: {str(e)}")
+            return {"action": "2", "reasoning": "Default scrape due to OpenRouter API error"}
 
 # Search keys
-search_keys = {
+search_keys = { 
     "username": os.getenv("LINKEDIN_EMAIL"),
     "password": os.getenv("LINKEDIN_PASSWORD"),
     "keywords": os.getenv("SEARCH_KEYWORDS", "Data Scientist,Software Engineer").split(","),
@@ -76,11 +65,9 @@ search_keys = {
 }
 
 if not search_keys["username"] or not search_keys["password"]:
-    logging.error("LinkedIn credentials not found in environment variables")
-    raise ValueError("LINKEDIN_EMAIL or LINKEDIN_PASSWORD not found")
+    raise ValueError("LINKEDIN_EMAIL or LINKEDIN_PASSWORD not found in .env")
 
 logging.info(f"Loaded credentials - Username: {search_keys['username']}")
-logging.info(f"Search parameters - Keywords: {search_keys['keywords']}, Locations: {search_keys['locations']}")
 
 class ScraperMemory:
     def __init__(self):
@@ -91,7 +78,7 @@ class ScraperMemory:
             'action_count': 0,
             'start_time': datetime.now()
         }
-
+    
     def update(self, url, action, page_hash):
         self.state['visited_urls'].add(url)
         if self.state['last_action'] == action and page_hash in self.state['page_hashes']:
@@ -100,41 +87,32 @@ class ScraperMemory:
             self.state['action_count'] = 1
         self.state['last_action'] = action
         self.state['page_hashes'].add(page_hash)
-
+    
     def should_stop(self):
         max_runtime = 10800  # 3 hours
         time_elapsed = (datetime.now() - self.state['start_time']).total_seconds()
         return self.state['action_count'] > 5 or time_elapsed > max_runtime
 
 class LinkedInProfileScraper:
-    def __init__(self, search_keys, llm_client):
+    def __init__(self, search_keys, llm_client, headless=True):
         self.search_keys = search_keys
         self.llm = llm_client
-        db_path = os.getenv("DATABASE_PATH", 'linkedin_profiles.db')
-        self.db_conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.db_conn = sqlite3.connect('linkedin_profiles.db', check_same_thread=False)
         self._init_db()
         self.max_profiles = int(os.getenv("MAX_PROFILES", 200))
+        self.headless = headless
         self.user_agents = [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0'
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'
         ]
-        self.should_terminate = False
-
-    def register_signal_handlers(self):
-        def handle_shutdown(signum, frame):
-            logging.info(f"Received signal {signum}. Initiating graceful shutdown...")
-            self.should_terminate = True
-            self.export_to_json()
-        signal.signal(signal.SIGTERM, handle_shutdown)
-        signal.signal(signal.SIGINT, handle_shutdown)
 
     def _init_db(self):
         with self.db_conn:
             self.db_conn.execute('''CREATE TABLE IF NOT EXISTS profiles
-                                 (id TEXT PRIMARY KEY, name TEXT, url TEXT, location TEXT,
-                                  title TEXT, company TEXT, connection_degree TEXT, last_scraped TEXT)''')
+                                 (id TEXT PRIMARY KEY,
+                                  name TEXT,
+                                  url TEXT,
+                                  last_scraped TEXT)''')
 
     def _profile_exists(self, profile_id):
         cursor = self.db_conn.cursor()
@@ -150,98 +128,106 @@ class LinkedInProfileScraper:
         with self.db_conn:
             cursor = self.db_conn.cursor()
             for profile in profiles:
-                cursor.execute('''INSERT OR REPLACE INTO profiles 
-                               (id, name, url, location, title, company, connection_degree, last_scraped)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                            (profile.get('id', ''), profile.get('name', ''), 
-                             profile.get('url', ''), profile.get('location', ''),
-                             profile.get('title', ''), profile.get('company', ''),
-                             profile.get('connection_degree', ''), profile.get('timestamp', '')))
+                cursor.execute('''INSERT OR IGNORE INTO profiles 
+                               (id, name, url, last_scraped)
+                               VALUES (?, ?, ?, ?)''',
+                            (profile['id'], profile['name'], 
+                             profile['url'], profile['timestamp']))
         self.export_to_json()
 
     def _human_like_delay(self):
-        if self.should_terminate:
-            return
-        base_delay = random.uniform(5, 10)
+        delay = random.uniform(5, 10)
         if self._count_profiles() > 100:
-            base_delay *= 1.5
-        jitter = random.uniform(-1, 1)
-        delay = max(3, min(base_delay + jitter, 15))
+            delay *= 1.5
         time.sleep(delay)
 
-    async def login(self, session):
-        headers = {'User-Agent': random.choice(self.user_agents)}
+    def get_chrome_options(self):
+        options = webdriver.ChromeOptions()
+        options.add_argument(f"user-agent={random.choice(self.user_agents)}")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        if self.headless:
+            options.add_argument("--headless")
+        return options
+
+    async def login(self, driver):
+        driver.get("https://www.linkedin.com/login")
         try:
-            login_url = "https://www.linkedin.com/login"
-            response = await session.get(login_url, headers=headers)
-            await response.html.arender(timeout=30)
-            csrf_token = response.html.xpath("//input[@name='csrfToken']/@value", first=True)
-            if not csrf_token:
-                logging.error("CSRF token not found")
-                raise ValueError("CSRF token not found")
-            login_data = {
-                'session_key': self.search_keys["username"],
-                'session_password': self.search_keys["password"],
-                'csrfToken': csrf_token
-            }
-            login_response = await session.post(login_url, data=login_data, headers=headers)
-            await login_response.html.arender(timeout=30)
-            if "feed-navigation" not in login_response.text and "global-nav" not in login_response.text:
-                logging.error("Login failed - authentication error")
-                raise Exception("Login failed")
+            WebDriverWait(driver, 30).until(
+                EC.presence_of_element_located((By.ID, "username"))
+            )
+            email_field = driver.find_element(By.ID, "username")
+            email_field.send_keys(self.search_keys["username"])
+            logging.info("Entered username")
+
+            password_field = driver.find_element(By.ID, "password")
+            password_field.send_keys(self.search_keys["password"])
+            logging.info("Entered password")
+
+            login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
+            login_button.click()
+            logging.info("Clicked login button")
+
+            WebDriverWait(driver, 60).until(
+                EC.presence_of_element_located((By.ID, "global-nav"))
+            )
             logging.info("Login successful")
+        except TimeoutException:
+            logging.error("Login failed: Timeout or CAPTCHA required")
+            raise Exception("Login failed - CAPTCHA or timeout")
         except Exception as e:
             logging.error(f"Login failed: {str(e)}")
             raise
         self._human_like_delay()
 
-    async def navigate_to_people_search(self):
-        return "https://www.linkedin.com/search/results/people/"
-
-    async def enter_search_keys(self, keyword, location, session):
-        search_url = f"https://www.linkedin.com/search/results/people/?keywords={keyword.replace(' ', '%20')}%20{location.replace(' ', '%20')}"
-        headers = {'User-Agent': random.choice(self.user_agents)}
-        try:
-            response = await session.get(search_url, headers=headers)
-            await response.html.arender(timeout=30)
-            logging.info(f"Searching for: {keyword} in {location}")
-            return response
-        except Exception as e:
-            logging.error(f"Search failed: {str(e)}")
-            raise
+    async def navigate_to_people_search(self, driver):
+        url = "https://www.linkedin.com/search/results/people/"
+        driver.get(url)
         self._human_like_delay()
+        logging.info("Navigated to people search page")
 
-    async def get_page_hash(self, response):
+    async def enter_search_keys(self, driver, keyword, location):
         try:
-            profile_content = ''.join(response.html.xpath("//a[contains(@href, '/in/')]/@href"))
-            return hashlib.md5(profile_content.encode()).hexdigest()
-        except:
-            return hashlib.md5(response.text.encode()).hexdigest()
+            WebDriverWait(driver, 120).until(
+                EC.presence_of_element_located((By.XPATH, "//input[@placeholder='Search']"))
+            )
+            search_bar = driver.find_element(By.XPATH, "//input[@placeholder='Search']")
+            search_bar.clear()
+            search_query = f"{keyword} {location}"
+            for char in search_query:
+                search_bar.send_keys(char)
+                time.sleep(random.uniform(0.1, 0.3))
+            search_bar.send_keys(Keys.RETURN)
+            self._human_like_delay()
+            logging.info(f"Searching for: {search_query}")
+        except Exception as e:
+            logging.error(f"Search input failed: {str(e)}")
+            raise
 
-    async def decide_next_action(self, response, memory):
+    async def get_page_hash(self, driver):
+        return hashlib.md5(driver.page_source.encode()).hexdigest()
+
+    async def decide_next_action(self, driver, memory):
         profile_count = self._count_profiles()
-        page_hash = await self.get_page_hash(response)
+        page_hash = await self.get_page_hash(driver)
         try:
-            profile_cards = len(response.html.xpath("//a[contains(@href, '/in/')]"))
-            next_button = bool(response.html.xpath("//button[@aria-label='Next' and not(@disabled)]") or 
-                               response.html.xpath("//a[@aria-label='Next']"))
-            captcha_detected = bool(response.html.xpath("//div[contains(text(), 'captcha') or contains(text(), 'CAPTCHA')]"))
-            error_detected = bool(response.html.xpath("//div[contains(text(), 'unusual') or contains(text(), 'suspicious')]"))
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(5)
+            profile_cards = len(driver.find_elements(By.XPATH, "//a[contains(@href, '/in/')]"))
+            next_button = driver.find_element(By.CSS_SELECTOR, "button[aria-label='Next']").is_enabled()
+        except NoSuchElementException:
+            next_button = False
+            profile_cards = 0
         except Exception as e:
             logging.error(f"Error detecting elements: {str(e)}")
             profile_cards = 0
             next_button = False
-            captcha_detected = False
-            error_detected = False
 
-        summary = (f"Profiles collected: {profile_count}/{self.max_profiles}, "
-                  f"Cards visible: {profile_cards}, Next button: {next_button}, "
-                  f"CAPTCHA detected: {captcha_detected}, Error: {error_detected}")
-        
+        summary = f"Profiles: {profile_count}/{self.max_profiles}, Cards: {profile_cards}, Next: {next_button}"
         prompt = f"""
         Current state: {summary}
         Previous action repeated: {memory.state['action_count']} times
-        Time running: {(datetime.now() - memory.state['start_time']).total_seconds()/60:.1f} minutes
         
         Options:
         1. Click next page
@@ -252,265 +238,143 @@ class LinkedInProfileScraper:
         Action: <number>
         Reasoning: <text>
         """
-        
-        if captcha_detected or error_detected:
-            return {"action": "3", "reasoning": "Anti-scraping measures detected"}
-        
         decision = await self.llm.query(prompt)
         
         if decision["action"] == "3" and profile_count < self.max_profiles and (next_button or profile_cards > 0):
-            if profile_cards > 0:
-                return {"action": "2", "reasoning": "Override: Content available for scraping"}
-            elif next_button:
-                return {"action": "1", "reasoning": "Override: Next page available"}
+            return {"action": "1" if next_button else "2", 
+                    "reasoning": "Override: Less than max profiles, continuing with next page or scrape."}
         return decision
 
-    async def extract_profile_details(self, element):
-        details = {}
-        try:
-            title_elements = element.xpath(".//div[contains(@class, 'entity-result__primary-subtitle')]")
-            if title_elements:
-                details['title'] = title_elements[0].text.strip()
-            company_elements = element.xpath(".//div[contains(@class, 'entity-result__secondary-subtitle')]")
-            if company_elements:
-                details['company'] = company_elements[0].text.strip()
-            location_elements = element.xpath(".//div[contains(@class, 'entity-result__tertiary-subtitle')]")
-            if location_elements:
-                details['location'] = location_elements[0].text.strip()
-            connection_elements = element.xpath(".//span[contains(@class, 'distance-badge')]")
-            if connection_elements:
-                details['connection_degree'] = connection_elements[0].text.strip()
-        except Exception as e:
-            logging.warning(f"Error extracting profile details: {str(e)}")
-        return details
-
-    async def scrape_profiles(self, response, memory):
+    async def scrape_profiles(self, driver, memory):
         profiles = []
         try:
-            profile_cards = response.html.xpath("//li[contains(@class, 'reusable-search__result-container')]")
-            for card in profile_cards:
-                if self._count_profiles() >= self.max_profiles or self.should_terminate:
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(5)
+            WebDriverWait(driver, 60).until(
+                EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '/in/')]"))
+            )
+            links = driver.find_elements(By.XPATH, "//a[contains(@href, '/in/')]")
+            for link in links:
+                if self._count_profiles() >= self.max_profiles:
                     break
                 try:
-                    link_element = card.xpath(".//a[contains(@href, '/in/')]", first=True)
-                    if not link_element:
-                        continue
-                    url = link_element.attrs.get('href', '').split("?")[0]
+                    url = link.get_attribute("href").split("?")[0]
                     if "/in/" not in url or url in memory.state['visited_urls']:
                         continue
-                    name = link_element.text.strip()
+                    name_elem = link.find_element(By.XPATH, ".//span[contains(@class, 'entity-result__title-text')] | .//span")
+                    name = name_elem.text.strip()
                     if name and "linkedin.com/in/" in url:
                         profile_id = url.split('/in/')[-1].strip('/')
                         if not self._profile_exists(profile_id):
-                            details = await self.extract_profile_details(card)
-                            profile_data = {
+                            profiles.append({
                                 'id': profile_id,
                                 'name': name,
                                 'url': url,
-                                'timestamp': datetime.now().isoformat(),
-                                **details
-                            }
-                            profiles.append(profile_data)
+                                'timestamp': datetime.now().isoformat()
+                            })
                             memory.state['visited_urls'].add(url)
                             logging.info(f"Scraped profile: {name} - {url}")
-                except Exception as e:
-                    logging.warning(f"Error processing profile card: {str(e)}")
-        except Exception as e:
-            logging.error(f"Scraping failed: {str(e)}")
+                except Exception:
+                    continue
+        except TimeoutException:
+            logging.error("Timeout waiting for profile links")
         return profiles
 
-    async def click_next_page(self, response, session):
-        try:
-            next_url = response.html.xpath("//a[@aria-label='Next']/@href", first=True)
-            if next_url:
-                headers = {'User-Agent': random.choice(self.user_agents)}
-                next_response = await session.get(f"https://www.linkedin.com{next_url}", headers=headers)
-                await next_response.html.arender(timeout=30)
+    async def click_next_with_retry(self, driver, retries=3):
+        for attempt in range(retries):
+            try:
+                next_button = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "button[aria-label='Next']"))
+                )
+                next_button.click()
                 self._human_like_delay()
-                return next_response
-            next_button = response.html.xpath("//button[@aria-label='Next' and not(@disabled)]", first=True)
-            if next_button:
-                await response.html.page.evaluate('document.querySelector("button[aria-label=\'Next\']:not([disabled])").click()')
-                await asyncio.sleep(3)
-                await response.html.page.reload()
-                await response.html.arender(timeout=30)
-                self._human_like_delay()
-                return response
-            return None
-        except Exception as e:
-            logging.error(f"Failed to navigate to next page: {str(e)}")
-            return None
+                return True
+            except Exception as e:
+                logging.warning(f"Retry {attempt+1}/{retries} for next button: {str(e)}")
+                await asyncio.sleep(5)
+        logging.error("Failed to click next after retries")
+        return False
 
-    async def run_search(self, keyword, location, memory):
-        if self.should_terminate:
-            return
-        session = AsyncHTMLSession()
-        try:
-            await self.login(session)
-            await self.navigate_to_people_search()
-            response = await self.enter_search_keys(keyword, location, session)
-            loop_count = 0
-            while self._count_profiles() < self.max_profiles and not self.should_terminate:
-                loop_count += 1
-                if memory.should_stop() or loop_count > 30:
-                    logging.warning(f"Stopping search for '{keyword} {location}' after {loop_count} iterations")
+    async def navigate_search_results(self, driver, keyword, location, memory):
+        await self.enter_search_keys(driver, keyword, location)
+        while self._count_profiles() < self.max_profiles:
+            if memory.should_stop():
+                logging.error("Stopping due to potential infinite loop or timeout")
+                break
+            
+            decision = await self.decide_next_action(driver, memory)
+            action, reasoning = decision["action"], decision["reasoning"]
+            page_hash = await self.get_page_hash(driver)
+            logging.info(f"LLM decided: {action} - {reasoning}")
+            memory.update(driver.current_url, action, page_hash)
+            
+            if action == "1":
+                if not await self.click_next_with_retry(driver):
                     break
-                decision = await self.decide_next_action(response, memory)
-                action, reasoning = decision["action"], decision["reasoning"]
-                page_hash = await self.get_page_hash(response)
-                logging.info(f"Decision for '{keyword} {location}': {action} - {reasoning}")
-                memory.update(response.url, action, page_hash)
-                if action == "1":
-                    next_response = await self.click_next_page(response, session)
-                    if not next_response:
-                        logging.warning("Could not navigate to next page, stopping")
-                        break
-                    response = next_response
-                elif action == "2":
-                    profiles = await self.scrape_profiles(response, memory)
-                    if profiles:
-                        self._save_profiles(profiles)
-                    self._human_like_delay()
-                elif action == "3":
-                    logging.info(f"Stopping search for '{keyword} {location}' based on LLM decision")
-                    break
-        except Exception as e:
-            logging.error(f"Error in search task for '{keyword} {location}': {str(e)}")
-            self.export_to_json()
-        finally:
-            await session.close()
+            elif action == "2":
+                profiles = await self.scrape_profiles(driver, memory)
+                if profiles:
+                    self._save_profiles(profiles)
+                self._human_like_delay()
+            elif action == "3":
+                break
+
+    async def run_search(self, driver, keyword, location, memory):
+        await self.navigate_to_people_search(driver)
+        await self.navigate_search_results(driver, keyword, location, memory)
+
+    async def run_parallel_searches(self):
+        semaphore = asyncio.Semaphore(1)  # Limit to 1 browser on Render free tier
+        async def limited_run(kw, loc):
+            async with semaphore:
+                driver = webdriver.Chrome(options=self.get_chrome_options())
+                memory = ScraperMemory()
+                try:
+                    await self.login(driver)
+                    await self.run_search(driver, kw, loc, memory)
+                except Exception as e:
+                    logging.error(f"Task for {kw} {loc} failed: {str(e)}")
+                finally:
+                    driver.quit()
+
+        tasks = [
+            limited_run(kw, loc)
+            for kw in self.search_keys["keywords"] 
+            for loc in self.search_keys["locations"]
+            if self._count_profiles() < self.max_profiles
+        ]
+        await asyncio.gather(*tasks)
 
     def export_to_json(self):
         cursor = self.db_conn.cursor()
-        cursor.execute('SELECT id, name, url, location, title, company, connection_degree, last_scraped FROM profiles')
+        cursor.execute('SELECT id, name, url, last_scraped FROM profiles')
         profiles = [{
-            'id': row[0], 'name': row[1], 'url': row[2], 'location': row[3],
-            'title': row[4], 'company': row[5], 'connection_degree': row[6], 'scraped_at': row[7]
+            'name': row[1],
+            'url': row[2],
+            'scraped_at': row[3]
         } for row in cursor.fetchall()]
+        
         try:
             with open(self.search_keys["filename"], 'r') as f:
                 existing_profiles = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             existing_profiles = []
-        existing_urls = {p.get('url') for p in existing_profiles}
-        new_profiles = [p for p in profiles if p.get('url') not in existing_urls]
-        updated_profiles = existing_profiles + new_profiles
-        try:
-            with open(self.search_keys["filename"], 'w') as f:
-                json.dump(updated_profiles, f, indent=2)
-            logging.info(f"Exported {len(updated_profiles)} profiles to {self.search_keys['filename']}")
-        except Exception as e:
-            logging.error(f"Failed to export profiles to JSON: {str(e)}")
+        
+        updated_profiles = existing_profiles + [p for p in profiles if p not in existing_profiles]
+        
+        with open(self.search_keys["filename"], 'w') as f:
+            json.dump(updated_profiles, f, indent=2)
         return updated_profiles
 
     def run(self):
-        asyncio.run(self.run_parallel_searches())
-        logging.info(f"Total profiles collected: {self._count_profiles()}")
-        self.db_conn.close()
-
-    async def run_parallel_searches(self):
-        self.register_signal_handlers()
-        semaphore = asyncio.Semaphore(2)
-        async def limited_run(kw, loc):
-            async with semaphore:
-                if not self.should_terminate and self._count_profiles() < self.max_profiles:
-                    memory = ScraperMemory()
-                    await self.run_search(kw, loc, memory)
-        tasks = [asyncio.create_task(limited_run(kw, loc)) 
-                 for kw in self.search_keys["keywords"] 
-                 for loc in self.search_keys["locations"] 
-                 if self._count_profiles() < self.max_profiles and not self.should_terminate]
-        await asyncio.gather(*tasks)
-        self.export_to_json()
-
-@app.route('/health')
-def health_check():
-    return jsonify({"status": "ok", "timestamp": datetime.now().isoformat()})
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/start_scrape', methods=['POST'])
-def start_scrape():
-    data = request.get_json() or {}
-    keyword = data.get('keyword', search_keys["keywords"][0])
-    location = data.get('location', search_keys["locations"][0])
-    max_profiles = data.get('max_profiles')
-    if max_profiles and max_profiles.isdigit():
-        search_keys["max_profiles"] = int(max_profiles)
-    
-    try:
-        llm_client = LLMClient()
-        scraper = LinkedInProfileScraper(search_keys, llm_client)
-        
-        def run_scraper_background():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            memory = ScraperMemory()
-            try:
-                loop.run_until_complete(scraper.run_search(keyword, location, memory))
-            except Exception as e:
-                logging.error(f"Background scraper thread error: {str(e)}")
-            finally:
-                loop.close()
-                scraper.db_conn.close()
-        
-        thread = threading.Thread(target=run_scraper_background)
-        thread.daemon = True
-        thread.start()
-        
-        return jsonify({
-            "status": "Scraping started",
-            "keyword": keyword,
-            "location": location,
-            "message": "Check /profiles endpoint for results"
-        })
-    except Exception as e:
-        logging.error(f"Error starting scrape: {str(e)}")
-        return jsonify({"status": "Scraping failed", "error": str(e)}), 500
-
-@app.route('/profiles', methods=['GET'])
-def get_profiles():
-    try:
-        with open(search_keys["filename"], 'r') as f:
-            profiles = json.load(f)
-        return jsonify(profiles)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return jsonify([])
-
-@app.route('/stats', methods=['GET'])
-def get_stats():
-    try:
-        llm_client = LLMClient()
-        scraper = LinkedInProfileScraper(search_keys, llm_client)
-        profile_count = scraper._count_profiles()
         try:
-            with open(search_keys["filename"], 'r') as f:
-                profiles = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            profiles = []
-        locations, titles, companies = {}, {}, {}
-        for profile in profiles:
-            location = profile.get('location', 'Unknown')
-            locations[location] = locations.get(location, 0) + 1
-            title = profile.get('title', 'Unknown')
-            titles[title] = titles.get(title, 0) + 1
-            company = profile.get('company', 'Unknown')
-            companies[company] = companies.get(company, 0) + 1
-        return jsonify({
-            "total_profiles": profile_count,
-            "unique_locations": len(locations),
-            "unique_titles": len(titles),
-            "unique_companies": len(companies),
-            "top_locations": dict(sorted(locations.items(), key=lambda x: x[1], reverse=True)[:5]),
-            "top_titles": dict(sorted(titles.items(), key=lambda x: x[1], reverse=True)[:5]),
-            "top_companies": dict(sorted(companies.items(), key=lambda x: x[1], reverse=True)[:5])
-        })
-    except Exception as e:
-        logging.error(f"Error getting stats: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+            asyncio.run(self.run_parallel_searches())
+            logging.info(f"Total profiles collected: {self._count_profiles()}")
+        finally:
+            self.db_conn.close()
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    llm_client = LLMClient()
+    # Set headless=True for Render deployment
+    scraper = LinkedInProfileScraper(search_keys, llm_client, headless=True)
+    scraper.run()
