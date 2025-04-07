@@ -152,38 +152,63 @@ class LinkedInProfileScraper:
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+        # Additional anti-detection measures
+        options.add_argument("--disable-extensions")
+        options.add_argument("--start-maximized")
+        options.add_argument("--disable-infobars")
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
         if self.headless:
-            options.add_argument("--headless")
+            options.add_argument("--headless=new")  # Newer headless mode
         return options
 
-    async def login(self, driver):
-        driver.get("https://www.linkedin.com/login")
-        try:
-            WebDriverWait(driver, 30).until(
-                EC.presence_of_element_located((By.ID, "username"))
-            )
-            email_field = driver.find_element(By.ID, "username")
-            email_field.send_keys(self.search_keys["username"])
-            logging.info("Entered username")
+    async def login(self, driver, max_retries=3):
+        for attempt in range(max_retries):
+            driver.get("https://www.linkedin.com/login")
+            try:
+                WebDriverWait(driver, 30).until(
+                    EC.presence_of_element_located((By.ID, "username"))
+                )
+                email_field = driver.find_element(By.ID, "username")
+                email_field.send_keys(self.search_keys["username"])
+                logging.info("Entered username")
 
-            password_field = driver.find_element(By.ID, "password")
-            password_field.send_keys(self.search_keys["password"])
-            logging.info("Entered password")
+                password_field = driver.find_element(By.ID, "password")
+                password_field.send_keys(self.search_keys["password"])
+                logging.info("Entered password")
 
-            login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
-            login_button.click()
-            logging.info("Clicked login button")
+                login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
+                login_button.click()
+                logging.info("Clicked login button")
 
-            WebDriverWait(driver, 60).until(
-                EC.presence_of_element_located((By.ID, "global-nav"))
-            )
-            logging.info("Login successful")
-        except TimeoutException:
-            logging.error("Login failed: Timeout or CAPTCHA required")
-            raise Exception("Login failed - CAPTCHA or timeout")
-        except Exception as e:
-            logging.error(f"Login failed: {str(e)}")
-            raise
+                try:
+                    WebDriverWait(driver, 120).until(  # Increased timeout to 2 minutes
+                        EC.presence_of_element_located((By.ID, "global-nav"))
+                    )
+                    logging.info("Login successful")
+                    break
+                except TimeoutException:
+                    # Check for CAPTCHA
+                    captcha_present = len(driver.find_elements(By.XPATH, "//iframe[contains(@src, 'captcha')]")) > 0
+                    if captcha_present and not self.headless:
+                        logging.warning("CAPTCHA detected. Please solve it manually in the browser.")
+                        WebDriverWait(driver, 300).until(  # 5-minute window for manual solving
+                            EC.presence_of_element_located((By.ID, "global-nav"))
+                        )
+                        logging.info("Login successful after CAPTCHA resolution")
+                        break
+                    else:
+                        logging.warning(f"Login attempt {attempt + 1}/{max_retries} failed: Timeout or CAPTCHA required")
+                        if attempt == max_retries - 1:
+                            raise Exception("Login failed - CAPTCHA or timeout after retries")
+                        self._human_like_delay()  # Wait before retrying
+            except TimeoutException:
+                logging.warning(f"Login attempt {attempt + 1}/{max_retries} failed: Timeout waiting for login page")
+                if attempt == max_retries - 1:
+                    raise Exception("Login failed - Timeout waiting for login page after retries")
+            except Exception as e:
+                logging.error(f"Login failed: {str(e)}")
+                raise
         self._human_like_delay()
 
     async def navigate_to_people_search(self, driver):
@@ -363,7 +388,7 @@ def start_scrape():
     location = data.get('location', search_keys["locations"][0])
     
     llm_client = LLMClient()
-    scraper = LinkedInProfileScraper(search_keys, llm_client, headless=True)
+    scraper = LinkedInProfileScraper(search_keys, llm_client, headless=True)  # Set to False for manual CAPTCHA solving
     
     def run_scraper():
         driver = webdriver.Chrome(options=scraper.get_chrome_options())
@@ -371,7 +396,7 @@ def start_scrape():
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(scraper.login(driver))
+            loop.run_until_complete(scraper.login(driver, max_retries=3))
             loop.run_until_complete(scraper.run_search(driver, keyword, location, memory))
         except Exception as e:
             logging.error(f"Scraper thread error: {str(e)}")
