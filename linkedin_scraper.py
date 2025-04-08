@@ -17,10 +17,11 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import threading
+from shutil import which
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed from INFO to DEBUG for more detailed logs
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler()]
 )
@@ -101,6 +102,8 @@ class LinkedInProfileScraper:
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'
         ]
         self.llm = llm_client
+        # Create a screenshots directory
+        os.makedirs("/tmp/screenshots", exist_ok=True)
 
     def _init_db(self):
         with self.db_conn:
@@ -168,16 +171,28 @@ class LinkedInProfileScraper:
 
     def get_chrome_options(self):
         options = webdriver.ChromeOptions()
-        # Use Render's default Chrome binary path or fallback
+        # Find Chrome binary automatically if not found at default location
         chrome_binary = os.getenv("CHROME_BINARY_PATH", "/usr/lib/chromium-browser/chrome")
+        if not os.path.exists(chrome_binary):
+            logging.warning(f"Chrome binary not found at {chrome_binary}")
+            chrome_path = which("google-chrome") or which("chrome") or which("chromium")
+            if chrome_path:
+                logging.info(f"Found Chrome at {chrome_path}")
+                chrome_binary = chrome_path
+            else:
+                logging.warning("Chrome binary not found automatically. Using default configuration.")
+        
         if os.path.exists(chrome_binary):
             options.binary_location = chrome_binary
+            logging.info(f"Using Chrome binary at: {chrome_binary}")
+        
         options.add_argument(f"user-agent={random.choice(self.user_agents)}")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
-        options.add_argument("--headless=new")
+        # Comment out headless mode for troubleshooting login issues
+        # options.add_argument("--headless=new")
         options.add_argument("--window-size=1920,1080")
         options.add_argument("--start-maximized")
         options.add_argument("--disable-notifications")
@@ -191,79 +206,154 @@ class LinkedInProfileScraper:
         for attempt in range(max_retries):
             try:
                 logging.info(f"Login attempt {attempt + 1}/{max_retries}")
+                logging.info("Deleting cookies")
                 driver.delete_all_cookies()
+                logging.info("Navigating to LinkedIn homepage")
                 driver.get("https://www.linkedin.com")
+                # Take screenshot of the initial page
+                driver.save_screenshot(f"/tmp/screenshots/initial_page_{attempt}.png")
+                logging.info(f"Saved screenshot of initial page: /tmp/screenshots/initial_page_{attempt}.png")
                 self._human_like_delay()
                 
                 try:
+                    logging.info("Looking for sign-in button")
                     sign_in = WebDriverWait(driver, 10).until(
                         EC.element_to_be_clickable((By.CSS_SELECTOR, "a[data-tracking-control-name='guest_homepage-basic_nav-header-signin']"))
                     )
+                    logging.info("Sign-in button found, clicking")
+                    driver.save_screenshot(f"/tmp/screenshots/before_signin_click_{attempt}.png")
                     sign_in.click()
                     logging.info("Clicked sign in from homepage")
-                except Exception:
+                except Exception as e:
+                    logging.info(f"Could not find sign-in button: {str(e)}")
+                    logging.info("Navigating directly to login page")
                     driver.get("https://www.linkedin.com/login")
-                    logging.info("Navigated directly to login page")
+                    driver.save_screenshot(f"/tmp/screenshots/login_page_direct_{attempt}.png")
                 
-                WebDriverWait(driver, 60).until(
-                    EC.presence_of_element_located((By.ID, "username"))
-                )
-                email_field = driver.find_element(By.ID, "username")
-                self._human_like_typing(email_field, self.search_keys["username"])
-                time.sleep(random.uniform(1.5, 3.0))
-                password_field = driver.find_element(By.ID, "password")
-                self._human_like_typing(password_field, self.search_keys["password"])
-                time.sleep(random.uniform(1.5, 3.0))
-                
-                self._randomize_browser_behavior(driver)
-                login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
-                login_button.click()
-                logging.info("Clicked login button")
+                # Take screenshot of login page
+                driver.save_screenshot(f"/tmp/screenshots/login_page_{attempt}.png")
+                logging.info(f"Waiting for username field")
                 
                 try:
-                    WebDriverWait(driver, 180).until(
-                        EC.any_of(
-                            EC.presence_of_element_located((By.ID, "global-nav")),
-                            EC.presence_of_element_located((By.ID, "voyager-feed")),
-                            EC.presence_of_element_located((By.CSS_SELECTOR, ".feed-container"))
-                        )
+                    WebDriverWait(driver, 60).until(
+                        EC.presence_of_element_located((By.ID, "username"))
                     )
-                    logging.info("Login successful")
+                    logging.info("Username field found")
+                    email_field = driver.find_element(By.ID, "username")
+                    logging.info(f"Typing email: {self.search_keys['username'][:3]}***")
+                    self._human_like_typing(email_field, self.search_keys["username"])
+                    time.sleep(random.uniform(1.5, 3.0))
+                    
+                    logging.info("Looking for password field")
+                    password_field = driver.find_element(By.ID, "password")
+                    logging.info("Typing password: ********")
+                    self._human_like_typing(password_field, self.search_keys["password"])
+                    time.sleep(random.uniform(1.5, 3.0))
+                    
+                    # Take screenshot before clicking login
+                    driver.save_screenshot(f"/tmp/screenshots/before_login_click_{attempt}.png")
+                    logging.info("Randomizing browser behavior")
                     self._randomize_browser_behavior(driver)
-                    break
+                    
+                    logging.info("Finding login button")
+                    login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
+                    logging.info("Clicking login button")
+                    login_button.click()
+                    logging.info("Login button clicked")
+                    
+                    # Take screenshot after clicking login
+                    driver.save_screenshot(f"/tmp/screenshots/after_login_click_{attempt}.png")
+                    
+                    # Check for CAPTCHA or security challenges
+                    if self._check_for_captcha(driver):
+                        logging.warning("CAPTCHA detected! Need manual intervention")
+                        driver.save_screenshot(f"/tmp/screenshots/captcha_detected_{attempt}.png")
+                        # Wait longer to allow manual CAPTCHA solving if running in visible mode
+                        time.sleep(60)
+                    
+                    logging.info("Waiting for successful login...")
+                    try:
+                        WebDriverWait(driver, 180).until(
+                            EC.any_of(
+                                EC.presence_of_element_located((By.ID, "global-nav")),
+                                EC.presence_of_element_located((By.ID, "voyager-feed")),
+                                EC.presence_of_element_located((By.CSS_SELECTOR, ".feed-container"))
+                            )
+                        )
+                        # Take screenshot of successful login
+                        driver.save_screenshot(f"/tmp/screenshots/login_successful_{attempt}.png")
+                        logging.info("Login successful")
+                        self._randomize_browser_behavior(driver)
+                        break
+                    except TimeoutException:
+                        logging.warning(f"Login attempt {attempt + 1} failed: Timeout waiting for home page")
+                        driver.save_screenshot(f"/tmp/screenshots/login_timeout_{attempt}.png")
+                        if attempt == max_retries - 1:
+                            raise Exception("Login failed - Timeout or CAPTCHA after retries")
                 except TimeoutException:
-                    logging.warning(f"Login attempt {attempt + 1} failed: Timeout")
+                    logging.warning(f"Login attempt {attempt + 1} failed: Timeout waiting for username field")
+                    driver.save_screenshot(f"/tmp/screenshots/username_timeout_{attempt}.png")
                     if attempt == max_retries - 1:
-                        raise Exception("Login failed - Timeout or CAPTCHA after retries")
+                        raise Exception("Login failed - Timeout waiting for login form")
             except Exception as e:
                 logging.error(f"Login attempt failed: {str(e)}")
+                driver.save_screenshot(f"/tmp/screenshots/login_error_{attempt}.png")
                 if attempt == max_retries - 1:
                     raise
                 time.sleep(random.uniform(30, 60))
         self._human_like_delay()
 
+    def _check_for_captcha(self, driver):
+        """Check if a CAPTCHA or security challenge is present"""
+        captcha_indicators = [
+            "//div[contains(text(), 'CAPTCHA')]",
+            "//div[contains(text(), 'security check')]",
+            "//div[contains(text(), 'unusual activity')]",
+            "//div[contains(text(), 'verify')]",
+            "//iframe[contains(@src, 'captcha')]",
+            "//iframe[contains(@src, 'challenge')]"
+        ]
+        
+        for indicator in captcha_indicators:
+            try:
+                elements = driver.find_elements(By.XPATH, indicator)
+                if elements:
+                    logging.warning(f"CAPTCHA/Security check indicator found: {indicator}")
+                    return True
+            except Exception:
+                pass
+        return False
+
     async def navigate_to_people_search(self, driver):
         url = "https://www.linkedin.com/search/results/people/"
+        logging.info(f"Navigating to people search: {url}")
         driver.get(url)
+        driver.save_screenshot("/tmp/screenshots/people_search_page.png")
         self._human_like_delay()
         logging.info("Navigated to people search page")
 
     async def enter_search_keys(self, driver, keyword, location):
         try:
+            logging.info("Waiting for search bar")
             WebDriverWait(driver, 120).until(
                 EC.presence_of_element_located((By.XPATH, "//input[@placeholder='Search']"))
             )
+            driver.save_screenshot("/tmp/screenshots/before_search.png")
             search_bar = driver.find_element(By.XPATH, "//input[@placeholder='Search']")
             search_bar.clear()
             search_query = f"{keyword} {location}"
+            logging.info(f"Typing search query: {search_query}")
             for char in search_query:
                 search_bar.send_keys(char)
                 time.sleep(random.uniform(0.1, 0.3))
+            logging.info("Pressing Enter to search")
             search_bar.send_keys(Keys.RETURN)
+            driver.save_screenshot("/tmp/screenshots/after_search.png")
             self._human_like_delay()
             logging.info(f"Searching for: {search_query}")
         except Exception as e:
             logging.error(f"Search input failed: {str(e)}")
+            driver.save_screenshot("/tmp/screenshots/search_error.png")
             raise
 
     async def get_page_hash(self, driver):
@@ -316,22 +406,33 @@ class LinkedInProfileScraper:
     async def scrape_profiles(self, driver, memory, retries=2):
         for attempt in range(retries):
             try:
+                logging.info(f"Scraping profiles attempt {attempt+1}/{retries}")
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 time.sleep(5)
+                driver.save_screenshot(f"/tmp/screenshots/before_scrape_attempt_{attempt}.png")
+                
+                logging.info("Waiting for profile links")
                 WebDriverWait(driver, 60).until(
                     EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '/in/')]"))
                 )
+                
                 links = driver.find_elements(By.XPATH, "//a[contains(@href, '/in/')]")
+                logging.info(f"Found {len(links)} potential profile links")
+                
                 profiles = []
-                for link in links:
+                for i, link in enumerate(links):
                     if self._count_profiles() >= self.max_profiles:
+                        logging.info(f"Reached maximum profile count ({self.max_profiles})")
                         break
                     try:
                         url = link.get_attribute("href").split("?")[0]
                         if "/in/" not in url or url in memory.state['visited_urls']:
                             continue
+                        
+                        logging.info(f"Processing link {i+1}: {url}")
                         name_elem = link.find_element(By.XPATH, ".//span[contains(@class, 'entity-result__title-text')] | .//span")
                         name = name_elem.text.strip()
+                        
                         if name and "linkedin.com/in/" in url:
                             profile_id = url.split('/in/')[-1].strip('/')
                             if not self._profile_exists(profile_id):
@@ -346,10 +447,14 @@ class LinkedInProfileScraper:
                     except Exception as e:
                         logging.debug(f"Error processing link: {str(e)}")
                         continue
+                
+                logging.info(f"Successfully scraped {len(profiles)} new profiles")
+                driver.save_screenshot("/tmp/screenshots/after_scrape.png")
                 self._randomize_browser_behavior(driver)
                 return profiles
             except TimeoutException:
                 logging.warning(f"Attempt {attempt + 1}/{retries} failed: Timeout waiting for profile links")
+                driver.save_screenshot(f"/tmp/screenshots/scrape_timeout_{attempt}.png")
                 if attempt == retries - 1:
                     logging.error("Max retries reached for scraping profiles")
                     return []
@@ -359,15 +464,22 @@ class LinkedInProfileScraper:
     async def click_next_with_retry(self, driver, retries=3):
         for attempt in range(retries):
             try:
+                logging.info(f"Trying to click next button, attempt {attempt+1}/{retries}")
+                driver.save_screenshot(f"/tmp/screenshots/before_next_click_{attempt}.png")
+                
                 next_button = WebDriverWait(driver, 10).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, "button[aria-label='Next']"))
                 )
+                logging.info("Next button found and clickable")
                 next_button.click()
+                logging.info("Next button clicked")
+                driver.save_screenshot(f"/tmp/screenshots/after_next_click_{attempt}.png")
                 self._human_like_delay()
                 self._randomize_browser_behavior(driver)
                 return True
             except Exception as e:
                 logging.warning(f"Retry {attempt+1}/{retries} for next button: {str(e)}")
+                driver.save_screenshot(f"/tmp/screenshots/next_button_error_{attempt}.png")
                 await asyncio.sleep(5)
         logging.error("Failed to click next after retries")
         return False
@@ -449,20 +561,25 @@ def start_scrape():
     }
     
     llm_client = LLMClient()
-    scraper = LinkedInProfileScraper(search_keys, llm_client, headless=True)
+    scraper = LinkedInProfileScraper(search_keys, llm_client, headless=False)  # Changed to non-headless
     
     def run_scraper():
         try:
+            logging.info("Initializing Chrome driver")
             driver = webdriver.Chrome(options=scraper.get_chrome_options())
             memory = ScraperMemory()
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
+                logging.info("Starting login process")
                 loop.run_until_complete(scraper.login(driver, max_retries=3))
+                logging.info("Login successful, starting search")
                 loop.run_until_complete(scraper.run_search(driver, keyword, location, memory))
+                logging.info("Search completed")
             except Exception as e:
                 logging.error(f"Scraper thread error: {str(e)}")
             finally:
+                logging.info("Cleaning up resources")
                 driver.quit()
                 loop.close()
                 scraper.db_conn.close()
@@ -472,6 +589,7 @@ def start_scrape():
     thread = threading.Thread(target=run_scraper)
     thread.daemon = True
     thread.start()
+    logging.info(f"Scraper thread started for keyword '{keyword}' in '{location}'")
     
     return jsonify({"status": "Scraping started", "keyword": keyword, "location": location})
 
@@ -491,4 +609,5 @@ def get_profiles():
 if __name__ == "__main__":
     # Render expects the app to bind to 0.0.0.0 and use the PORT env variable
     port = int(os.environ.get("PORT", 5000))
+    logging.info(f"Starting server on port {port}")
     app.run(host='0.0.0.0', port=port)
