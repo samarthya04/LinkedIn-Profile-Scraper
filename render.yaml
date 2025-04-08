@@ -3,11 +3,13 @@ services:
     name: linkedin-scraper
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    startCommand: gunicorn --bind 0.0.0.0:$PORT app:app
     envVars:
-      - key: OPENROUTER_API_KEY
-        sync: false
-      - key: MAX_PROFILES
-        value: 200
+      - key: CHROME_BINARY_PATH
+        value: /usr/lib/chrome/chrome
       - key: OUTPUT_FILENAME
         value: /tmp/profiles.json
+      - key: MAX_PROFILES
+        value: 100
+      - key: OPENROUTER_API_KEY
+        sync: false
